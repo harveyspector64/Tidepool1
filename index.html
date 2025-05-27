@@ -1,789 +1,1007 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>POLYP - Tide Pool Sim</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #1a202c; /* Dark blue-gray, like deep water */
-            color: #e2e8f0; /* Light text for contrast */
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
-            overflow: hidden; /* Prevent scrollbars from canvas */
-        }
-        #gameCanvas {
-            border: 1px solid #4a5568; /* A subtle border */
-            background-color: #2c3e50; /* Darker water color for canvas */
-            border-radius: 0.5rem;
-            box-shadow: 0 0 20px rgba(0, 183, 255, 0.3);
-        }
-        .info-panel {
-            background-color: rgba(45, 55, 72, 0.7); /* Semi-transparent dark background */
-            padding: 0.75rem 1.25rem;
-            border-radius: 0.5rem;
-            margin-bottom: 1rem;
-            font-size: 0.875rem;
-            text-align: center;
-            max-width: 90%;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .info-panel p {
-            margin: 0.25rem 0;
-        }
-        .info-panel strong {
-            color: #63b3ed; /* Light blue for emphasis */
-        }
-        /* Custom message box for alerts */
-        #messageBox {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: #f56565; /* Red for errors/warnings */
-            color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-            z-index: 1000;
-            display: none; /* Hidden by default */
-            opacity: 0;
-            transition: opacity 0.5s ease-in-out;
-        }
-        #messageBox.success {
-            background-color: #48bb78; /* Green for success */
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>POLYP - Tide Pool Symphony</title>
+<style>
+body {
+   margin: 0;
+   padding: 0;
+   overflow: hidden;
+   background: #000;
+   touch-action: none;
+   -webkit-touch-callout: none;
+   -webkit-user-select: none;
+   user-select: none;
+}
+canvas {
+   display: block;
+   cursor: crosshair;
+}
+</style>
 </head>
-<body class="bg-gray-900 text-gray-200 flex flex-col items-center justify-center min-h-screen p-4">
-
-    <div id="messageBox"></div>
-
-    <div class="info-panel">
-        <h1 class="text-2xl font-bold text-blue-400 mb-2">POLYP</h1>
-        <p>You are a sea anemone. Click your polyps to sting prey (small dots).</p>
-        <p>Hold click to charge a wider sting. Release to strike.</p>
-        <p>When a polyp glows (full energy), click it then click an adjacent empty rock cell (darker gray squares) to clone.</p>
-        <p>Survive the changing tides. Polyps in the 'Dry Zone' (light blue area at low tide) will lose energy.</p>
-        <p>Current Energy (Selected Polyp): <strong id="energyDisplay">N/A</strong></p>
-        <p>Tide Level: <strong id="tideDisplay">Rising</strong></p>
-    </div>
-
-    <canvas id="gameCanvas"></canvas>
-
-    <script>
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
-
-        const energyDisplay = document.getElementById('energyDisplay');
-        const tideDisplay = document.getElementById('tideDisplay');
-        const messageBox = document.getElementById('messageBox');
-
-        let animationFrameId;
-
-        // --- Game Configuration ---
-        const GRID_SIZE = 40; // Size of each cell in the grid
-        const ROCK_COLOR = '#4A5568'; // Darker gray for rock
-        const WATER_COLOR = '#2c3e50'; // Canvas background
-        const SAND_COLOR = '#A0AEC0'; // Lighter gray for sand (non-clonable)
-        const DRY_ZONE_COLOR = 'rgba(173, 216, 230, 0.3)'; // Light blue for dry zone
-
-        const POLYP_RADIUS = GRID_SIZE * 0.3;
-        const POLYP_MAX_ENERGY = 100;
-        const POLYP_CLONE_COST = 80;
-        const POLYP_STING_COST_INITIAL = 1; // Energy cost to initiate sting
-        const POLYP_STING_COST_CHARGED = 5; // Additional cost for fully charged sting
-
-        const PLANKTON_RADIUS = 3;
-        const PLANKTON_COLOR = '#A7F3D0'; // Light green
-        const PLANKTON_ENERGY_VALUE = 15;
-        const MAX_PLANKTON = 25;
-
-        const CURRENT_PARTICLE_COLOR = 'rgba(199, 210, 254, 0.5)';
-        const MAX_CURRENT_PARTICLES = 50;
-
-        const TIDE_CYCLE_DURATION = 120000; // 2 minutes for a full tide cycle
-        const TIDE_MAX_RECESSION_ROWS = 3; // How many rows can become dry
-
-        // --- Game State ---
-        let polyps = [];
-        let prey = [];
-        let currentParticles = [];
-        let gameGrid = []; // 0: water, 1: rock, 2: sand
-        let numCols, numRows;
-
-        let current = {
-            direction: Math.PI / 4, // Angle in radians
-            magnitude: 0.5,         // Speed
-            oscillationTime: 0,
-            oscillationSpeed: 0.0005,
-            magnitudeOscillationSpeed: 0.0003
-        };
-
-        let tide = {
-            level: 0.5, // 0 (low) to 1 (high)
-            time: 0,
-            direction: 1 // 1 for rising, -1 for falling
-        };
-
-        let selectedPolyp = null;
-        let isCloningMode = false;
-        let mouse = { x: 0, y: 0, down: false, chargeTime: 0 };
-
-        // --- Utility Functions ---
-        function getRandom(min, max) {
-            return Math.random() * (max - min) + min;
-        }
-
-        function distance(x1, y1, x2, y2) {
-            return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-        }
-
-        function showMessage(text, type = 'error', duration = 3000) {
-            messageBox.textContent = text;
-            messageBox.className = type === 'success' ? 'success' : '';
-            messageBox.style.display = 'block';
-            messageBox.style.opacity = '1';
-            setTimeout(() => {
-                messageBox.style.opacity = '0';
-                setTimeout(() => messageBox.style.display = 'none', 500);
-            }, duration);
-        }
-
-        // --- Game Grid Initialization ---
-        function initGrid() {
-            numCols = Math.floor(canvas.width / GRID_SIZE);
-            numRows = Math.floor(canvas.height / GRID_SIZE);
-            gameGrid = [];
-            for (let r = 0; r < numRows; r++) {
-                gameGrid[r] = [];
-                for (let c = 0; c < numCols; c++) {
-                    // Create a central rock area, surrounded by some sand
-                    if (c > numCols * 0.2 && c < numCols * 0.8 && r > numRows * 0.2 && r < numRows * 0.8) {
-                        gameGrid[r][c] = (Math.random() > 0.1) ? 1 : 2; // 90% rock, 10% sand patch
-                    } else {
-                        gameGrid[r][c] = 2; // Sand at edges
-                    }
-                    // Ensure some rock cells for starting
-                    if (r === Math.floor(numRows/2) && c === Math.floor(numCols/2) && gameGrid[r][c] !== 1) {
-                        gameGrid[r][c] = 1; // Ensure center is rock
-                    }
-                }
-            }
-        }
-
-        // --- Polyp Class ---
-        class Polyp {
-            constructor(gridX, gridY) {
-                this.gridX = gridX;
-                this.gridY = gridY;
-                this.x = (gridX + 0.5) * GRID_SIZE;
-                this.y = (gridY + 0.5) * GRID_SIZE;
-                this.energy = POLYP_MAX_ENERGY / 2; // Start with some energy
-                this.radius = POLYP_RADIUS;
-                this.color = `hsl(${getRandom(180, 240)}, 70%, 60%)`; // Shades of blue/cyan
-                this.tentacles = [];
-                this.numTentacles = 8;
-                this.tentacleLength = this.radius * 1.2;
-                this.isStinging = false;
-                this.stingCharge = 0; // 0 to 1
-                this.stingAngle = Math.PI / 2; // Initial sting arc
-                this.stingRetractTimer = 0;
-                this.pulseAnimation = 0;
-                this.isDying = false;
-                this.deathTimer = 0;
-                this.initTentacles();
-            }
-
-            initTentacles() {
-                this.tentacles = [];
-                for (let i = 0; i < this.numTentacles; i++) {
-                    const angle = (i / this.numTentacles) * Math.PI * 2;
-                    this.tentacles.push({
-                        angle: angle,
-                        length: this.tentacleLength,
-                        swayOffset: getRandom(0, Math.PI * 2), // For gentle swaying
-                        extendedLength: 0, // For sting animation
-                        isExtending: false,
-                        isRetracting: false
-                    });
-                }
-            }
-
-            draw() {
-                // Polyp Body
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = this.color;
-                if (this.isDying) {
-                     ctx.fillStyle = `rgba(100, 100, 100, ${1 - this.deathTimer / 60})`;
-                }
-                ctx.fill();
-
-                // Energy Glow
-                if (!this.isDying) {
-                    const currentEnergyRatio = Math.max(0, this.energy / POLYP_MAX_ENERGY); // Ensure ratio is non-negative
-                    const glowRadius = this.radius * currentEnergyRatio * 0.8;
-                    ctx.beginPath();
-                    // Ensure final radius for arc is non-negative
-                    ctx.arc(this.x, this.y, Math.max(0, glowRadius + Math.sin(this.pulseAnimation) * 2), 0, Math.PI * 2);
-                    ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + currentEnergyRatio * 0.4})`;
-                    ctx.fill();
-                }
-                
-                // Tentacles
-                this.tentacles.forEach(t => {
-                    const baseAngle = t.angle;
-                    const sway = Math.sin(Date.now() * 0.001 + t.swayOffset) * 0.1; // Gentle sway
-                    const currentInfluence = Math.atan2(Math.sin(current.direction - baseAngle), Math.cos(current.direction - baseAngle)) * 0.1 * current.magnitude;
-                    const finalAngle = baseAngle + sway + currentInfluence;
-                    
-                    let len = t.length;
-                    if (t.isExtending || t.isRetracting) {
-                        len = t.extendedLength;
-                    }
-
-                    ctx.beginPath();
-                    ctx.moveTo(this.x, this.y);
-                    const endX = this.x + Math.cos(finalAngle) * len;
-                    const endY = this.y + Math.sin(finalAngle) * len;
-                    ctx.lineTo(endX, endY);
-                    ctx.strokeStyle = this.isDying ? 'rgba(120,120,120,0.5)' : this.color;
-                    ctx.lineWidth = 3;
-                    ctx.stroke();
-                });
-
-                // Sting Charge Indicator (if charging)
-                if (mouse.down && selectedPolyp === this && !isCloningMode && !this.isStinging) {
-                    const chargeRadius = this.radius + this.stingCharge * this.radius * 2;
-                    ctx.beginPath();
-                    ctx.arc(this.x, this.y, chargeRadius, 0, Math.PI * 2);
-                    ctx.strokeStyle = `rgba(255, 255, 255, ${0.2 + this.stingCharge * 0.3})`;
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-
-                // Selection Ring
-                if (selectedPolyp === this) {
-                    ctx.beginPath();
-                    ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
-                    ctx.strokeStyle = isCloningMode ? '#68D391' : '#63B3ED'; // Green for cloning, blue for selection
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-            }
-
-            update() {
-                this.pulseAnimation += 0.05;
-                if (this.isDying) {
-                    this.deathTimer++;
-                    if (this.deathTimer > 60) { // Remove after 1 second of fade
-                        polyps = polyps.filter(p => p !== this);
-                        if (selectedPolyp === this) selectedPolyp = null;
-                    }
-                    return;
-                }
-
-
-                // Sting animation
-                if (this.isStinging) {
-                    this.stingRetractTimer--;
-                    this.tentacles.forEach(t => {
-                        if (t.isExtending) {
-                            t.extendedLength += (this.radius * 2.5 + this.radius * this.stingCharge * 1.5 - t.extendedLength) * 0.2;
-                            if (Math.abs(t.extendedLength - (this.radius * 2.5 + this.radius * this.stingCharge * 1.5)) < 1) {
-                                t.isExtending = false;
-                                t.isRetracting = true;
-                            }
-                        } else if (t.isRetracting) {
-                            t.extendedLength += (this.tentacleLength - t.extendedLength) * 0.15;
-                             if (Math.abs(t.extendedLength - this.tentacleLength) < 1) {
-                                t.isRetracting = false;
-                                t.extendedLength = this.tentacleLength; // Reset
-                            }
-                        }
-                    });
-                    if (this.stingRetractTimer <= 0) {
-                        this.isStinging = false;
-                        this.stingCharge = 0; // Reset charge after sting
-                        this.tentacles.forEach(t => {
-                            t.isExtending = false;
-                            t.isRetracting = false;
-                            t.extendedLength = this.tentacleLength;
-                        });
-                    }
-                } else if (mouse.down && selectedPolyp === this && !isCloningMode) {
-                     // Charge sting
-                    if (this.energy > POLYP_STING_COST_INITIAL) {
-                        this.stingCharge = Math.min(1, this.stingCharge + 0.05);
-                    } else {
-                        this.stingCharge = 0; // Not enough energy to charge
-                    }
-                }
-
-
-                // Energy decay in dry zone
-                const dryRows = Math.floor(TIDE_MAX_RECESSION_ROWS * (1 - tide.level));
-                if (this.gridY < dryRows || this.gridY >= numRows - dryRows) { // Check top and bottom dry zones
-                    this.energy -= 0.05; // Slow energy loss
-                    this.energy = Math.max(0, this.energy); // Clamp energy to be non-negative
-                    if (this.energy <= 0) {
-                        this.isDying = true;
-                    }
-                }
-            }
-
-            startSting() {
-                if (this.isStinging || this.energy < POLYP_STING_COST_INITIAL || isCloningMode) return;
-
-                this.isStinging = true;
-                this.stingRetractTimer = 30; // Duration of sting visibility
-                this.energy -= POLYP_STING_COST_INITIAL + (this.stingCharge * POLYP_STING_COST_CHARGED);
-                this.energy = Math.max(0, this.energy); // Clamp energy
-
-                this.tentacles.forEach(t => {
-                    t.isExtending = true;
-                    t.isRetracting = false;
-                    t.extendedLength = t.length; // Start extending from current length
-                });
-
-                // Check for prey capture
-                const actualStingRadius = this.radius * 2.5 + this.radius * this.stingCharge * 1.5;
-                prey.forEach(pr => {
-                    if (!pr.isCaught && distance(this.x, this.y, pr.x, pr.y) < actualStingRadius) {
-                        // More precise check: is prey within the arc of tentacles?
-                        // Simplified: just check distance for now.
-                        this.digest(pr);
-                        pr.isCaught = true; // Mark as caught
-                    }
-                });
-                this.stingCharge = 0; // Reset charge after use
-            }
-
-            digest(p) {
-                this.energy += p.energyValue;
-                this.energy = Math.min(POLYP_MAX_ENERGY, this.energy);
-                // Sound cue: Prey caught
-            }
-
-            canClone() {
-                return this.energy >= POLYP_CLONE_COST;
-            }
-
-            clone(targetGridX, targetGridY) {
-                if (!this.canClone()) {
-                    showMessage("Not enough energy to clone.", "error");
-                    return false;
-                }
-                if (gameGrid[targetGridY] && gameGrid[targetGridY][targetGridX] === 1) {
-                    // Check if cell is already occupied by another polyp
-                    const existingPolyp = polyps.find(p => p.gridX === targetGridX && p.gridY === targetGridY);
-                    if (existingPolyp) {
-                        showMessage("This spot is already occupied.", "error");
-                        return false;
-                    }
-
-                    this.energy -= POLYP_CLONE_COST;
-                    const newPolyp = new Polyp(targetGridX, targetGridY);
-                    polyps.push(newPolyp);
-                    // Sound cue: Clone spawn
-                    showMessage("New polyp cloned!", "success");
-                    return true;
-                }
-                showMessage("Cannot clone here. Must be on valid rock.", "error");
-                return false;
-            }
-        }
-
-        // --- Prey Class ---
-        class Plankton {
-            constructor() {
-                this.x = getRandom(0, canvas.width);
-                this.y = getRandom(0, canvas.height);
-                this.radius = PLANKTON_RADIUS;
-                this.color = PLANKTON_COLOR;
-                this.energyValue = PLANKTON_ENERGY_VALUE;
-                this.speed = current.magnitude * getRandom(0.5, 1.5);
-                this.isCaught = false;
-            }
-
-            draw() {
-                if (this.isCaught) return;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = this.color;
-                ctx.fill();
-            }
-
-            update() {
-                if (this.isCaught) return;
-
-                this.x += Math.cos(current.direction) * this.speed * current.magnitude;
-                this.y += Math.sin(current.direction) * this.speed * current.magnitude;
-
-                // Wrap around screen edges
-                if (this.x < -this.radius) this.x = canvas.width + this.radius;
-                if (this.x > canvas.width + this.radius) this.x = -this.radius;
-                if (this.y < -this.radius) this.y = canvas.height + this.radius;
-                if (this.y > canvas.height + this.radius) this.y = -this.radius;
-            }
-        }
-
-        // --- Current Particle Class ---
-        class CurrentParticle {
-            constructor() {
-                this.x = getRandom(0, canvas.width);
-                this.y = getRandom(0, canvas.height);
-                this.size = getRandom(1, 3);
-                this.opacity = getRandom(0.2, 0.6);
-                this.speed = current.magnitude * getRandom(0.8, 1.2);
-            }
-
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = `rgba(199, 210, 254, ${this.opacity * current.magnitude})`; // Opacity also tied to current strength
-                ctx.fill();
-            }
-
-            update() {
-                this.x += Math.cos(current.direction) * this.speed * current.magnitude * 2; // Particles move a bit faster to show current
-                this.y += Math.sin(current.direction) * this.speed * current.magnitude * 2;
-
-                if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
-                    // Reset particle if it goes off screen
-                    this.x = getRandom(0, canvas.width);
-                    this.y = getRandom(0, canvas.height);
-                    if (Math.random() < 0.5) { // Start from left/right or top/bottom based on current general direction
-                        if (Math.cos(current.direction) > 0) this.x = 0; else this.x = canvas.width;
-                    } else {
-                        if (Math.sin(current.direction) > 0) this.y = 0; else this.y = canvas.height;
-                    }
-                }
-            }
-        }
-        
-        // --- System Updates ---
-        function updateCurrent() {
-            current.oscillationTime += current.oscillationSpeed;
-            current.direction = Math.sin(current.oscillationTime) * Math.PI / 3 + Math.PI / 4; // Oscillates direction
-            current.magnitude = 0.3 + (Math.cos(current.oscillationTime * current.magnitudeOscillationSpeed) + 1) * 0.35; // Oscillates magnitude (0.3 to 1.0)
-
-            if (Math.random() < 0.001) { // Periodic surge
-                current.magnitude = getRandom(1.2, 1.8);
-                // Sound cue: Tide surge
-                setTimeout(() => { current.magnitude = 0.5 + (Math.cos(current.oscillationTime) + 1) * 0.25; }, getRandom(500,1500));
-            }
-            currentParticles.forEach(p => p.update());
-        }
-
-        function updateTide() {
-            tide.time += 0.0001; // Controls speed of tide change
-            // Sinusoidal tide level: (sin + 1) / 2 maps -1 to 1 range to 0 to 1
-            const newLevel = (Math.sin(tide.time * (Math.PI * 2 / (TIDE_CYCLE_DURATION / 1000))) + 1) / 2;
-            
-            if (newLevel > tide.level) tide.direction = 1; // Rising
-            else if (newLevel < tide.level) tide.direction = -1; // Falling
-            tide.level = newLevel;
-
-            // Update display
-            let tideStatus = tide.direction === 1 ? "Rising" : "Falling";
-            if (tide.level > 0.95) tideStatus = "High Tide";
-            if (tide.level < 0.05) tideStatus = "Low Tide";
-            tideDisplay.textContent = `${tideStatus} (${Math.round(tide.level * 100)}%)`;
-        }
-
-
-        // --- Drawing Functions ---
-        function drawGrid() {
-            for (let r = 0; r < numRows; r++) {
-                for (let c = 0; c < numCols; c++) {
-                    ctx.beginPath();
-                    ctx.rect(c * GRID_SIZE, r * GRID_SIZE, GRID_SIZE, GRID_SIZE);
-                    if (gameGrid[r][c] === 1) { // Rock
-                        ctx.fillStyle = ROCK_COLOR;
-                    } else if (gameGrid[r][c] === 2) { // Sand
-                        ctx.fillStyle = SAND_COLOR;
-                    } else { // Water (shouldn't happen with current grid logic)
-                        ctx.fillStyle = WATER_COLOR;
-                    }
-                    ctx.fill();
-                    // ctx.strokeStyle = "#384252"; // Grid lines (optional)
-                    // ctx.stroke();
-                }
-            }
-        }
-        
-        function drawDryZone() {
-            const dryRows = Math.floor(TIDE_MAX_RECESSION_ROWS * (1 - tide.level)); // Rows from top/bottom
-            if (dryRows > 0) {
-                // Top dry zone
-                ctx.fillStyle = DRY_ZONE_COLOR;
-                ctx.fillRect(0, 0, canvas.width, dryRows * GRID_SIZE);
-                // Bottom dry zone
-                ctx.fillRect(0, canvas.height - dryRows * GRID_SIZE, canvas.width, dryRows * GRID_SIZE);
-            }
-        }
-
-        function drawClonePreviews() {
-            if (!selectedPolyp || !isCloningMode) return;
-
-            const directions = [
-                { dr: -1, dc: 0 }, { dr: 1, dc: 0 },
-                { dr: 0, dc: -1 }, { dr: 0, dc: 1 },
-                { dr: -1, dc: -1 }, { dr: -1, dc: 1 },
-                { dr: 1, dc: -1 }, { dr: 1, dc: 1 } // Diagonals
-            ];
-
-            directions.forEach(dir => {
-                const nr = selectedPolyp.gridY + dir.dr;
-                const nc = selectedPolyp.gridX + dir.dc;
-
-                if (nr >= 0 && nr < numRows && nc >= 0 && nc < numCols && gameGrid[nr][nc] === 1) {
-                     // Check if cell is already occupied by another polyp
-                    const existingPolyp = polyps.find(p => p.gridX === nc && p.gridY === nr);
-                    if (!existingPolyp) {
-                        ctx.fillStyle = 'rgba(104, 211, 145, 0.5)'; // Semi-transparent green
-                        ctx.beginPath();
-                        ctx.arc((nc + 0.5) * GRID_SIZE, (nr + 0.5) * GRID_SIZE, POLYP_RADIUS * 0.8, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                }
-            });
-        }
-
-
-        // --- Game Loop ---
-        function gameLoop() {
-            // Clear canvas
-            ctx.fillStyle = WATER_COLOR;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Update systems
-            updateCurrent();
-            updateTide();
-
-            // Draw grid and environment
-            drawGrid();
-            currentParticles.forEach(p => p.draw());
-            drawDryZone(); // Draw dry zone before polyps
-
-            // Update and draw prey
-            prey.forEach(p => p.update());
-            prey = prey.filter(p => !p.isCaught); // Remove caught prey
-            prey.forEach(p => p.draw());
-            if (prey.length < MAX_PLANKTON && Math.random() < 0.05) { // Spawn new prey
-                prey.push(new Plankton());
-            }
-            
-            // Update and draw polyps
-            polyps.forEach(p => p.update());
-            polyps.forEach(p => p.draw());
-            
-            // Draw cloning previews if active
-            if (isCloningMode) {
-                drawClonePreviews();
-            }
-
-            // Update UI
-            if (selectedPolyp && !selectedPolyp.isDying) {
-                energyDisplay.textContent = `${Math.floor(selectedPolyp.energy)} / ${POLYP_MAX_ENERGY}`;
-            } else {
-                energyDisplay.textContent = "N/A";
-            }
-            
-            animationFrameId = requestAnimationFrame(gameLoop);
-        }
-
-        // --- Event Handlers ---
-        function handleMouseDown(event) {
-            mouse.down = true;
-            mouse.chargeTime = Date.now();
-            const rect = canvas.getBoundingClientRect();
-            mouse.x = event.clientX - rect.left;
-            mouse.y = event.clientY - rect.top;
-
-            const clickedGridX = Math.floor(mouse.x / GRID_SIZE);
-            const clickedGridY = Math.floor(mouse.y / GRID_SIZE);
-
-            let clickedOnPolyp = false;
-            for (let polyp of polyps) {
-                if (distance(mouse.x, mouse.y, polyp.x, polyp.y) < polyp.radius) {
-                    selectedPolyp = polyp;
-                    clickedOnPolyp = true;
-                    if (polyp.canClone()) {
-                        isCloningMode = true; // Enter cloning mode
-                        showMessage("Cloning mode: Click an adjacent valid rock cell.", "success", 2000);
-                    } else {
-                        isCloningMode = false; // Ensure not in cloning mode if cannot clone
-                        // Start charging sting immediately
-                        if (polyp.energy >= POLYP_STING_COST_INITIAL) {
-                             polyp.stingCharge = 0; // Reset charge on new mousedown
-                        }
-                    }
-                    break;
-                }
-            }
-
-            if (!clickedOnPolyp) {
-                if (isCloningMode && selectedPolyp) {
-                    // Attempt to clone at clickedGridX, clickedGridY
-                    const success = selectedPolyp.clone(clickedGridX, clickedGridY);
-                    if (success) {
-                        isCloningMode = false; // Exit cloning mode after successful clone
-                        selectedPolyp = polyps[polyps.length-1]; // Select the new polyp
-                    } else {
-                        // Cloning failed, remain in cloning mode or deselect based on preference
-                        // For now, stay in cloning mode if selectedPolyp is still valid
-                        if (selectedPolyp && !selectedPolyp.canClone()) isCloningMode = false; // Auto-exit if no longer able
-                    }
-                } else {
-                    selectedPolyp = null; // Clicked empty space
-                    isCloningMode = false;
-                }
-            }
-        }
-
-        function handleMouseUp() {
-            if (mouse.down && selectedPolyp && !isCloningMode && !selectedPolyp.isStinging) {
-                if (selectedPolyp.stingCharge > 0.1 || selectedPolyp.energy >= POLYP_STING_COST_INITIAL) { // Only sting if charged a bit or has min energy
-                    selectedPolyp.startSting();
-                } else if (selectedPolyp.energy < POLYP_STING_COST_INITIAL) {
-                    showMessage("Not enough energy to sting.", "error", 1500);
-                }
-            }
-            mouse.down = false;
-            if(selectedPolyp) selectedPolyp.stingCharge = 0; // Reset charge visual if mouse is up
-        }
-
-        function handleMouseMove(event) {
-            const rect = canvas.getBoundingClientRect();
-            mouse.x = event.clientX - rect.left;
-            mouse.y = event.clientY - rect.top;
-        }
-
-        // --- Initialization ---
-        function init() {
-            // Stop any previous game loop
-            if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId);
-            }
-
-            canvas.width = Math.min(window.innerWidth * 0.9, 800);
-            canvas.height = Math.min(window.innerHeight * 0.7, 600);
-            
-            // Ensure dimensions are multiples of GRID_SIZE for clean grid
-            canvas.width = Math.floor(canvas.width / GRID_SIZE) * GRID_SIZE;
-            canvas.height = Math.floor(canvas.height / GRID_SIZE) * GRID_SIZE;
-
-
-            initGrid();
-            polyps = [];
-            // Start with one polyp in the center-ish rock
-            let startX = Math.floor(numCols / 2);
-            let startY = Math.floor(numRows / 2);
-            // Ensure the starting cell is actually rock
-            if (numCols > 0 && numRows > 0) { // Check if grid is initialized
-                 while(gameGrid[startY] === undefined || gameGrid[startY][startX] === undefined || gameGrid[startY][startX] !== 1) { 
-                    startX = Math.floor(getRandom(numCols * 0.25, numCols * 0.75)); // Adjusted range slightly
-                    startY = Math.floor(getRandom(numRows * 0.25, numRows * 0.75));
-                    // Failsafe if loop runs too long or grid is mostly non-rock
-                    if (startX < 0 || startX >= numCols || startY < 0 || startY >= numRows || (numCols === 0 || numRows === 0)) { 
-                        startX = Math.floor(numCols / 2); 
-                        startY = Math.floor(numRows / 2); 
-                        if(gameGrid[startY] && gameGrid[startY][startX] !== undefined) gameGrid[startY][startX] = 1; else { console.error("Failed to set initial polyp rock."); break;}
-                        break;
-                    }
-                }
-                if(gameGrid[startY] && gameGrid[startY][startX] === 1) { // Final check before pushing
-                    polyps.push(new Polyp(startX, startY));
-                    selectedPolyp = polyps[0];
-                } else if (polyps.length === 0 && numCols > 0 && numRows > 0) { // Fallback if no rock found, place one
-                    console.warn("No suitable rock found for initial polyp, creating one at center.");
-                    startX = Math.floor(numCols / 2); 
-                    startY = Math.floor(numRows / 2);
-                    if(gameGrid[startY]) gameGrid[startY][startX] = 1;
-                    polyps.push(new Polyp(startX, startY));
-                    selectedPolyp = polyps[0];
-                }
-            }
-
-
-            prey = [];
-            for (let i = 0; i < MAX_PLANKTON / 2; i++) {
-                prey.push(new Plankton());
-            }
-
-            currentParticles = [];
-            for (let i = 0; i < MAX_CURRENT_PARTICLES; i++) {
-                currentParticles.push(new CurrentParticle());
-            }
-            
-            current.oscillationTime = 0;
-            tide.time = 0;
-            tide.level = 0.5; // Start at mid-tide
-
-            // Add event listeners
-            canvas.addEventListener('mousedown', handleMouseDown);
-            canvas.addEventListener('mouseup', handleMouseUp);
-            canvas.addEventListener('mousemove', handleMouseMove);
-            
-            // Touch events for mobile
-            canvas.addEventListener('touchstart', (e) => {
-                e.preventDefault(); // Prevent scrolling/zooming
-                if (e.touches.length > 0) {
-                    const touch = e.touches[0];
-                    const mockMouseEvent = new MouseEvent('mousedown', {
-                        clientX: touch.clientX,
-                        clientY: touch.clientY
-                    });
-                    handleMouseDown(mockMouseEvent);
-                }
-            }, { passive: false });
-
-            canvas.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                 const mockMouseEvent = new MouseEvent('mouseup', {}); // No specific coords needed for mouseup logic
-                 handleMouseUp(mockMouseEvent);
-            }, { passive: false });
-
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                if (e.touches.length > 0) {
-                    const touch = e.touches[0];
-                     const mockMouseEvent = new MouseEvent('mousemove', {
-                        clientX: touch.clientX,
-                        clientY: touch.clientY
-                    });
-                    handleMouseMove(mockMouseEvent);
-                }
-            }, { passive: false });
-
-
-            gameLoop();
-        }
-        
-        // Resize handler
-        function handleResize() {
-            // Debounce resize
-            clearTimeout(window.resizeTimeout);
-            window.resizeTimeout = setTimeout(() => {
-                 // Re-initialize the game on resize to adjust grid etc.
-                 // This is a simple approach; a more complex game might try to preserve state.
-                init();
-            }, 250);
-        }
-        window.addEventListener('resize', handleResize);
-
-        // Start the game
-        init();
-
-    </script>
+<body>
+<canvas id="game"></canvas>
+<script>
+/*
+MIT License - POLYP: Tide Pool Anemone Life Sim
+Deploy via GitHub Pages: Create repo, add this as index.html, enable Pages in Settings
+*/
+
+// Vector math utility
+class Vec {
+   constructor(x = 0, y = 0) {
+       this.x = x;
+       this.y = y;
+   }
+   
+   add(v) { return new Vec(this.x + v.x, this.y + v.y); }
+   sub(v) { return new Vec(this.x - v.x, this.y - v.y); }
+   mul(s) { return new Vec(this.x * s, this.y * s); }
+   div(s) { return new Vec(this.x / s, this.y / s); }
+   dot(v) { return this.x * v.x + this.y * v.y; }
+   len() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+   len2() { return this.x * this.x + this.y * this.y; }
+   norm() { const l = this.len(); return l > 0 ? this.div(l) : new Vec(); }
+   dist(v) { return this.sub(v).len(); }
+   lerp(v, t) { return this.add(v.sub(this).mul(t)); }
+   rotate(a) {
+       const c = Math.cos(a), s = Math.sin(a);
+       return new Vec(this.x * c - this.y * s, this.x * s + this.y * c);
+   }
+}
+
+// Audio synthesis engine
+class AudioBus {
+   constructor() {
+       this.ctx = null;
+       this.masterGain = null;
+       this.droneBass = null;
+       this.droneFilter = null;
+       
+       try {
+           this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+           this.masterGain = this.ctx.createGain();
+           this.masterGain.gain.value = 0.3;
+           this.masterGain.connect(this.ctx.destination);
+           
+           // Underwater drone
+           this.droneBass = this.ctx.createOscillator();
+           this.droneBass.type = 'sine';
+           this.droneBass.frequency.value = 55;
+           
+           this.droneFilter = this.ctx.createBiquadFilter();
+           this.droneFilter.type = 'lowpass';
+           this.droneFilter.frequency.value = 200;
+           this.droneFilter.Q.value = 2;
+           
+           this.droneBass.connect(this.droneFilter);
+           this.droneFilter.connect(this.masterGain);
+           this.droneBass.start();
+       } catch(e) {
+           console.log('Audio context unavailable');
+       }
+   }
+   
+   updateTide(tideLevel) {
+       if (!this.ctx) return;
+       const freq = 100 + tideLevel * 300;
+       this.droneFilter.frequency.linearRampToValueAtTime(freq, this.ctx.currentTime + 0.1);
+   }
+   
+   playPlink() { this.playSynth(440, 0.05, 'sine', 0.1); }
+   playStrike() { this.playSynth(220, 0.1, 'sawtooth', 0.2); }
+   playBloom() { this.playSynth(880, 0.3, 'sine', 0.05); }
+   playCrash() { this.playNoise(0.5, 0.3); }
+   
+   playSynth(freq, dur, type, vol) {
+       if (!this.ctx) return;
+       const osc = this.ctx.createOscillator();
+       const env = this.ctx.createGain();
+       osc.type = type;
+       osc.frequency.value = freq;
+       env.gain.value = 0;
+       env.gain.linearRampToValueAtTime(vol, this.ctx.currentTime + 0.01);
+       env.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
+       osc.connect(env);
+       env.connect(this.masterGain);
+       osc.start();
+       osc.stop(this.ctx.currentTime + dur);
+   }
+   
+   playNoise(dur, vol) {
+       if (!this.ctx) return;
+       const bufferSize = this.ctx.sampleRate * dur;
+       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+       const data = buffer.getChannelData(0);
+       for (let i = 0; i < bufferSize; i++) {
+           data[i] = Math.random() * 2 - 1;
+       }
+       const src = this.ctx.createBufferSource();
+       const env = this.ctx.createGain();
+       src.buffer = buffer;
+       env.gain.value = vol;
+       env.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
+       src.connect(env);
+       env.connect(this.masterGain);
+       src.start();
+   }
+}
+
+// Current field simulation
+class CurrentField {
+   constructor(w, h) {
+       this.w = w;
+       this.h = h;
+       this.time = 0;
+       this.scale = 0.002;
+   }
+   
+   update(dt) {
+       this.time += dt * 0.2;
+   }
+   
+   getFlow(pos) {
+       const t = this.time;
+       const s = this.scale;
+       const x = pos.x * s;
+       const y = pos.y * s;
+       
+       // Layered sinusoidal flow patterns
+       const angle = Math.sin(x + t) * Math.cos(y * 0.7 + t * 0.8) +
+                    Math.sin(x * 1.3 - t * 0.6) * Math.cos(y + t) * 0.5;
+       
+       return new Vec(Math.cos(angle) * 30, Math.sin(angle) * 20);
+   }
+}
+
+// Tide system
+class TideSystem {
+   constructor() {
+       this.time = 0;
+       this.period = 180; // 3 minute cycle
+       this.minLevel = 0.3;
+       this.maxLevel = 1.0;
+       this.surgeTimer = 0;
+       this.surgeActive = false;
+   }
+   
+   update(dt) {
+       this.time += dt;
+       
+       // Rare surge events
+       if (Math.random() < dt * 0.001 && !this.surgeActive) {
+           this.surgeActive = true;
+           this.surgeTimer = 3;
+       }
+       
+       if (this.surgeActive) {
+           this.surgeTimer -= dt;
+           if (this.surgeTimer <= 0) this.surgeActive = false;
+       }
+   }
+   
+   getLevel() {
+       const base = (Math.sin(this.time * Math.PI * 2 / this.period) + 1) * 0.5;
+       const level = this.minLevel + base * (this.maxLevel - this.minLevel);
+       return this.surgeActive ? Math.min(1, level + 0.3) : level;
+   }
+   
+   getWaterline(canvasHeight) {
+       return canvasHeight * (1 - this.getLevel());
+   }
+}
+
+// Base entity class
+class Entity {
+   constructor(pos) {
+       this.pos = pos;
+       this.vel = new Vec();
+       this.alive = true;
+   }
+   
+   update(dt, current) {
+       const flow = current.getFlow(this.pos);
+       this.vel = this.vel.mul(0.98).add(flow.mul(dt * 0.001));
+       this.pos = this.pos.add(this.vel.mul(dt));
+   }
+}
+
+// Prey types with unique behaviors
+class Prey extends Entity {
+   constructor(pos, type = 'plankton') {
+       super(pos);
+       this.type = type;
+       this.radius = { plankton: 3, shrimp: 6, fish: 10 }[type];
+       this.atp = { plankton: 5, shrimp: 15, fish: 30 }[type];
+       this.speed = { plankton: 10, shrimp: 30, fish: 50 }[type];
+       this.phase = Math.random() * Math.PI * 2;
+       this.wiggle = Math.random() * 0.5 + 0.5;
+       this.targetAngle = Math.random() * Math.PI * 2;
+       this.color = { 
+           plankton: 'rgba(150,255,200,0.8)',
+           shrimp: 'rgba(255,180,150,0.9)',
+           fish: 'rgba(100,200,255,0.9)'
+       }[type];
+   }
+   
+   update(dt, current, polyps, bounds) {
+       super.update(dt, current);
+       this.phase += dt * this.wiggle * 2;
+       
+       // Type-specific AI
+       if (this.type === 'fish') {
+           // Fish avoid polyps
+           let avoidance = new Vec();
+           for (const p of polyps) {
+               if (!p.alive) continue;
+               const d = this.pos.dist(p.pos);
+               if (d < 80) {
+                   avoidance = avoidance.add(this.pos.sub(p.pos).norm().mul(100 / d));
+               }
+           }
+           this.vel = this.vel.add(avoidance.mul(dt * 0.01));
+           
+           // Fish school behavior
+           this.targetAngle += (Math.random() - 0.5) * dt;
+           const targetVel = new Vec(Math.cos(this.targetAngle), Math.sin(this.targetAngle)).mul(this.speed);
+           this.vel = this.vel.lerp(targetVel, dt * 0.5);
+       } else if (this.type === 'shrimp') {
+           // Shrimp dart movement
+           if (Math.random() < dt * 0.5) {
+               this.vel = this.vel.add(new Vec(
+                   (Math.random() - 0.5) * this.speed,
+                   (Math.random() - 0.5) * this.speed
+               ));
+           }
+       } else {
+           // Plankton drift
+           const drift = new Vec(
+               Math.sin(this.phase) * this.speed * 0.3,
+               Math.cos(this.phase * 0.7) * this.speed * 0.2
+           );
+           this.vel = this.vel.add(drift.mul(dt * 0.01));
+       }
+       
+       // Bounds
+       if (this.pos.x < 20 || this.pos.x > bounds.x - 20) this.vel.x *= -1;
+       if (this.pos.y < 20 || this.pos.y > bounds.y - 20) this.vel.y *= -1;
+       this.pos.x = Math.max(20, Math.min(bounds.x - 20, this.pos.x));
+       this.pos.y = Math.max(20, Math.min(bounds.y - 20, this.pos.y));
+   }
+   
+   render(ctx, camOffset) {
+       const p = this.pos.add(camOffset);
+       ctx.save();
+       
+       if (this.type === 'fish') {
+           // Fish shape
+           ctx.translate(p.x, p.y);
+           ctx.rotate(Math.atan2(this.vel.y, this.vel.x));
+           ctx.fillStyle = this.color;
+           ctx.beginPath();
+           ctx.ellipse(0, 0, this.radius * 1.5, this.radius * 0.7, 0, 0, Math.PI * 2);
+           ctx.fill();
+           // Tail
+           ctx.beginPath();
+           ctx.moveTo(-this.radius, 0);
+           ctx.lineTo(-this.radius * 2, -this.radius * 0.5);
+           ctx.lineTo(-this.radius * 2, this.radius * 0.5);
+           ctx.closePath();
+           ctx.fill();
+       } else if (this.type === 'shrimp') {
+           // Shrimp shape
+           ctx.translate(p.x, p.y);
+           ctx.rotate(Math.atan2(this.vel.y, this.vel.x));
+           ctx.fillStyle = this.color;
+           ctx.beginPath();
+           ctx.ellipse(0, 0, this.radius, this.radius * 0.5, 0, 0, Math.PI * 2);
+           ctx.fill();
+           // Antennae
+           ctx.strokeStyle = this.color;
+           ctx.lineWidth = 1;
+           ctx.beginPath();
+           ctx.moveTo(this.radius, -2);
+           ctx.lineTo(this.radius + 5, -4);
+           ctx.moveTo(this.radius, 2);
+           ctx.lineTo(this.radius + 5, 4);
+           ctx.stroke();
+       } else {
+           // Plankton glow
+           const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, this.radius * 2);
+           glow.addColorStop(0, this.color);
+           glow.addColorStop(1, 'rgba(150,255,200,0)');
+           ctx.fillStyle = glow;
+           ctx.fillRect(p.x - this.radius * 2, p.y - this.radius * 2, this.radius * 4, this.radius * 4);
+       }
+       
+       ctx.restore();
+   }
+}
+
+// Predator base
+class Predator extends Entity {
+   constructor(pos, type = 'whelk') {
+       super(pos);
+       this.type = type;
+       this.radius = 15;
+       this.speed = 20;
+       this.huntTimer = 0;
+       this.target = null;
+   }
+   
+   update(dt, current, polyps, bounds) {
+       super.update(dt, current);
+       this.huntTimer -= dt;
+       
+       // Hunt polyps
+       if (this.huntTimer <= 0 && polyps.length > 0) {
+           this.target = polyps[Math.floor(Math.random() * polyps.length)];
+           this.huntTimer = 10 + Math.random() * 10;
+       }
+       
+       if (this.target && this.target.alive) {
+           const toTarget = this.target.pos.sub(this.pos);
+           const dist = toTarget.len();
+           if (dist > 5) {
+               this.vel = this.vel.add(toTarget.norm().mul(this.speed * dt * 0.01));
+           }
+           
+           // Attack
+           if (dist < this.radius + 10) {
+               this.target.takeDamage(dt * 5);
+           }
+       }
+       
+       // Bounds
+       if (this.pos.x < 20 || this.pos.x > bounds.x - 20) this.vel.x *= -0.5;
+       if (this.pos.y < 20 || this.pos.y > bounds.y - 20) this.vel.y *= -0.5;
+       this.pos.x = Math.max(20, Math.min(bounds.x - 20, this.pos.x));
+       this.pos.y = Math.max(20, Math.min(bounds.y - 20, this.pos.y));
+   }
+   
+   render(ctx, camOffset) {
+       const p = this.pos.add(camOffset);
+       
+       // Whelk shell spiral
+       ctx.save();
+       ctx.translate(p.x, p.y);
+       ctx.rotate(Math.atan2(this.vel.y, this.vel.x) + Math.PI / 2);
+       
+       const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, this.radius);
+       gradient.addColorStop(0, 'rgba(150,100,80,0.9)');
+       gradient.addColorStop(0.7, 'rgba(100,70,50,0.9)');
+       gradient.addColorStop(1, 'rgba(80,50,40,0.9)');
+       ctx.fillStyle = gradient;
+       
+       // Spiral shell
+       ctx.beginPath();
+       for (let i = 0; i < 50; i++) {
+           const angle = i * 0.3;
+           const r = this.radius * (1 - i / 50);
+           const x = Math.cos(angle) * r;
+           const y = Math.sin(angle) * r * 0.7;
+           if (i === 0) ctx.moveTo(x, y);
+           else ctx.lineTo(x, y);
+       }
+       ctx.fill();
+       
+       ctx.restore();
+   }
+}
+
+// Polyp anemone class
+class Polyp {
+   constructor(pos, parent = null) {
+       this.pos = pos;
+       this.parent = parent;
+       this.alive = true;
+       this.health = 100;
+       this.atp = 10;
+       this.cooldown = 0;
+       this.tentacles = [];
+       this.baseRadius = 15;
+       this.glowIntensity = 0;
+       this.wobble = Math.random() * Math.PI * 2;
+       this.mutation = parent ? this.inheritMutation() : null;
+       
+       // Generate tentacles
+       const count = 8 + Math.floor(Math.random() * 4);
+       for (let i = 0; i < count; i++) {
+           this.tentacles.push({
+               angle: (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.3,
+               length: 20 + Math.random() * 15,
+               phase: Math.random() * Math.PI * 2,
+               thickness: 2 + Math.random()
+           });
+       }
+   }
+   
+   inheritMutation() {
+       if (Math.random() < 0.1) {
+           return ['longReach', 'toxin', 'drought'][Math.floor(Math.random() * 3)];
+       }
+       return this.parent.mutation;
+   }
+   
+   update(dt, tide, waterline) {
+       this.cooldown = Math.max(0, this.cooldown - dt);
+       this.wobble += dt * 0.5;
+       this.glowIntensity *= 0.95;
+       
+       // Tide damage
+       if (this.pos.y < waterline) {
+           const damage = (waterline - this.pos.y) * dt * 0.5;
+           this.health -= this.mutation === 'drought' ? damage * 0.3 : damage;
+       }
+       
+       // Death check
+       if (this.health <= 0) {
+           this.alive = false;
+       }
+       
+       // Passive ATP generation
+       if (this.pos.y > waterline && this.atp < 100) {
+           this.atp += dt * 0.5;
+       }
+   }
+   
+   sting(prey, audio) {
+       if (this.cooldown > 0) return false;
+       
+       const reach = this.mutation === 'longReach' ? 60 : 40;
+       const dist = this.pos.dist(prey.pos);
+       
+       if (dist < reach) {
+           this.atp += prey.atp;
+           this.cooldown = 2;
+           this.glowIntensity = 1;
+           audio.playStrike();
+           
+           // Wobble tentacles
+           this.tentacles.forEach(t => t.phase += Math.random() * 2);
+           
+           return true;
+       }
+       return false;
+   }
+   
+   canClone() {
+       return this.atp >= 50 && this.cooldown <= 0;
+   }
+   
+   clone(targetPos, audio) {
+       if (!this.canClone()) return null;
+       
+       this.atp -= 50;
+       this.cooldown = 5;
+       this.glowIntensity = 2;
+       audio.playBloom();
+       
+       return new Polyp(targetPos, this);
+   }
+   
+   takeDamage(amount) {
+       this.health -= amount;
+       this.glowIntensity = Math.max(this.glowIntensity, 0.5);
+   }
+   
+   render(ctx, camOffset, waterline, time) {
+       const p = this.pos.add(camOffset);
+       const submerged = this.pos.y > waterline;
+       
+       ctx.save();
+       
+       // Base
+       const baseGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, this.baseRadius);
+       const healthFactor = this.health / 100;
+       const r = 50 + (1 - healthFactor) * 100;
+       const g = 100 + healthFactor * 100;
+       const b = 150 + healthFactor * 105;
+       
+       baseGradient.addColorStop(0, `rgba(${r},${g},${b},0.9)`);
+       baseGradient.addColorStop(1, `rgba(${r*0.5},${g*0.5},${b*0.5},0.7)`);
+       
+       ctx.fillStyle = baseGradient;
+       ctx.beginPath();
+       ctx.arc(p.x, p.y, this.baseRadius, 0, Math.PI * 2);
+       ctx.fill();
+       
+       // Tentacles
+       ctx.lineCap = 'round';
+       this.tentacles.forEach((t, i) => {
+           const wave = Math.sin(time * 2 + t.phase + this.wobble) * 0.3;
+           const angle = t.angle + wave;
+           const length = t.length * (submerged ? 1 : 0.6);
+           
+           // Tentacle gradient
+           const tGradient = ctx.createLinearGradient(
+               p.x, p.y,
+               p.x + Math.cos(angle) * length,
+               p.y + Math.sin(angle) * length
+           );
+           tGradient.addColorStop(0, `rgba(${r},${g},${b},0.8)`);
+           tGradient.addColorStop(1, `rgba(${r*0.7},${g*0.7},${b*1.2},0.3)`);
+           
+           ctx.strokeStyle = tGradient;
+           ctx.lineWidth = t.thickness * (submerged ? 1 : 0.7);
+           
+           ctx.beginPath();
+           ctx.moveTo(p.x, p.y);
+           
+           // Bezier curve tentacle
+           const cp1x = p.x + Math.cos(angle - 0.2) * length * 0.3;
+           const cp1y = p.y + Math.sin(angle - 0.2) * length * 0.3;
+           const cp2x = p.x + Math.cos(angle + 0.1) * length * 0.7;
+           const cp2y = p.y + Math.sin(angle + 0.1) * length * 0.7;
+           const endx = p.x + Math.cos(angle) * length;
+           const endy = p.y + Math.sin(angle) * length;
+           
+           ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endx, endy);
+           ctx.stroke();
+       });
+       
+       // Glow effect
+       if (this.glowIntensity > 0.1) {
+           const glowGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 40);
+           glowGradient.addColorStop(0, `rgba(100,200,255,${this.glowIntensity * 0.3})`);
+           glowGradient.addColorStop(1, 'rgba(100,200,255,0)');
+           ctx.fillStyle = glowGradient;
+           ctx.fillRect(p.x - 40, p.y - 40, 80, 80);
+       }
+       
+       // ATP indicator (subtle glow)
+       if (this.atp >= 50) {
+           const ready = ctx.createRadialGradient(p.x, p.y, this.baseRadius * 0.8, p.x, p.y, this.baseRadius);
+           ready.addColorStop(0, 'rgba(150,255,150,0)');
+           ready.addColorStop(1, 'rgba(150,255,150,0.4)');
+           ctx.fillStyle = ready;
+           ctx.beginPath();
+           ctx.arc(p.x, p.y, this.baseRadius, 0, Math.PI * 2);
+           ctx.fill();
+       }
+       
+       ctx.restore();
+   }
+}
+
+// Rock formations
+class Rock {
+   constructor(x, y, seed) {
+       this.x = x;
+       this.y = y;
+       this.seed = seed;
+       this.points = [];
+       
+       // Generate rock shape
+       const angles = 8 + Math.floor(seed * 4);
+       for (let i = 0; i < angles; i++) {
+           const angle = (i / angles) * Math.PI * 2;
+           const radius = 30 + seed * 20 + Math.sin(angle * 3 + seed * 10) * 10;
+           this.points.push({
+               x: Math.cos(angle) * radius,
+               y: Math.sin(angle) * radius * 0.7
+           });
+       }
+   }
+   
+   render(ctx, camOffset, depth = 1) {
+       const p = new Vec(this.x, this.y).add(camOffset);
+       
+       ctx.save();
+       ctx.translate(p.x, p.y);
+       
+       // Shadow
+       ctx.fillStyle = `rgba(0,0,20,${0.3 * depth})`;
+       ctx.beginPath();
+       ctx.moveTo(this.points[0].x + 5, this.points[0].y + 5);
+       this.points.forEach(pt => ctx.lineTo(pt.x + 5, pt.y + 5));
+       ctx.closePath();
+       ctx.fill();
+       
+       // Rock gradient
+       const gradient = ctx.createRadialGradient(0, -10, 0, 0, 0, 40);
+       const lightness = 40 + depth * 20;
+       gradient.addColorStop(0, `rgba(${lightness},${lightness},${lightness + 10},0.9)`);
+       gradient.addColorStop(1, `rgba(${lightness * 0.7},${lightness * 0.7},${lightness * 0.7},0.9)`);
+       
+       ctx.fillStyle = gradient;
+       ctx.beginPath();
+       ctx.moveTo(this.points[0].x, this.points[0].y);
+       this.points.forEach(pt => ctx.lineTo(pt.x, pt.y));
+       ctx.closePath();
+       ctx.fill();
+       
+       ctx.restore();
+   }
+}
+
+// Main renderer
+class Renderer {
+   constructor(canvas) {
+       this.canvas = canvas;
+       this.ctx = canvas.getContext('2d');
+       this.camOffset = new Vec();
+       this.camDrift = 0;
+       this.particles = [];
+       
+       this.resize();
+       window.addEventListener('resize', () => this.resize());
+   }
+   
+   resize() {
+       this.canvas.width = window.innerWidth;
+       this.canvas.height = window.innerHeight;
+   }
+   
+   update(dt) {
+       // Camera drift
+       this.camDrift += dt * 0.3;
+       this.camOffset = new Vec(
+           Math.sin(this.camDrift) * 1,
+           Math.cos(this.camDrift * 0.7) * 1
+       );
+       
+       // Update particles
+       this.particles = this.particles.filter(p => {
+           p.life -= dt;
+           p.y -= dt * 10;
+           p.x += Math.sin(p.phase) * dt * 5;
+           return p.life > 0;
+       });
+   }
+   
+   addBubbles(pos, count = 5) {
+       for (let i = 0; i < count; i++) {
+           this.particles.push({
+               x: pos.x + (Math.random() - 0.5) * 20,
+               y: pos.y,
+               life: 2 + Math.random(),
+               size: 2 + Math.random() * 3,
+               phase: Math.random() * Math.PI * 2
+           });
+       }
+   }
+   
+   render(game) {
+       const ctx = this.ctx;
+       const w = this.canvas.width;
+       const h = this.canvas.height;
+       
+       // Deep ocean gradient
+       const bgGradient = ctx.createLinearGradient(0, 0, 0, h);
+       bgGradient.addColorStop(0, '#001122');
+       bgGradient.addColorStop(0.5, '#002244');
+       bgGradient.addColorStop(1, '#003366');
+       ctx.fillStyle = bgGradient;
+       ctx.fillRect(0, 0, w, h);
+       
+       // Caustic light rays
+       ctx.save();
+       ctx.globalCompositeOperation = 'screen';
+       ctx.globalAlpha = 0.1;
+       for (let i = 0; i < 5; i++) {
+           const x = Math.sin(game.time * 0.2 + i * 1.7) * 100 + w * (i + 1) / 6;
+           const gradient = ctx.createLinearGradient(x - 50, 0, x + 50, h);
+           gradient.addColorStop(0, 'rgba(100,200,255,0)');
+           gradient.addColorStop(0.5, 'rgba(100,200,255,0.5)');
+           gradient.addColorStop(1, 'rgba(100,200,255,0)');
+           ctx.fillStyle = gradient;
+           ctx.fillRect(x - 50, 0, 100, h);
+       }
+       ctx.restore();
+       
+       // Background rocks (parallax)
+       game.rocks.forEach(rock => {
+           if (rock.y > h * 0.5) {
+               rock.render(ctx, this.camOffset.mul(0.5), 0.5);
+           }
+       });
+       
+       // Water surface
+       const waterline = game.tide.getWaterline(h);
+       ctx.save();
+       ctx.globalAlpha = 0.3;
+
+    // Water gradient
+       const waterGradient = ctx.createLinearGradient(0, waterline, 0, h);
+       waterGradient.addColorStop(0, 'rgba(100,200,255,0.2)');
+       waterGradient.addColorStop(0.5, 'rgba(50,150,220,0.4)');
+       waterGradient.addColorStop(1, 'rgba(20,80,150,0.6)');
+       ctx.fillStyle = waterGradient;
+       ctx.fillRect(0, waterline, w, h - waterline);
+       
+       // Surface waves
+       ctx.strokeStyle = 'rgba(200,255,255,0.3)';
+       ctx.lineWidth = 2;
+       ctx.beginPath();
+       for (let x = 0; x <= w; x += 20) {
+           const y = waterline + Math.sin(x * 0.02 + game.time) * 5;
+           if (x === 0) ctx.moveTo(x, y);
+           else ctx.lineTo(x, y);
+       }
+       ctx.stroke();
+       ctx.restore();
+       
+       // Render entities
+       game.prey.forEach(p => p.render(ctx, this.camOffset));
+       game.predators.forEach(p => p.render(ctx, this.camOffset));
+       
+       // Foreground rocks
+       game.rocks.forEach(rock => {
+           if (rock.y <= h * 0.5) {
+               rock.render(ctx, this.camOffset, 1);
+           }
+       });
+       
+       // Polyps
+       game.polyps.forEach(p => p.render(ctx, this.camOffset, waterline, game.time));
+       
+       // Particles
+       ctx.save();
+       ctx.globalAlpha = 0.6;
+       ctx.fillStyle = 'rgba(200,255,255,0.8)';
+       this.particles.forEach(p => {
+           const pos = new Vec(p.x, p.y).add(this.camOffset);
+           ctx.beginPath();
+           ctx.arc(pos.x, pos.y, p.size * (p.life / 2), 0, Math.PI * 2);
+           ctx.fill();
+       });
+       ctx.restore();
+       
+       // Grain overlay
+       ctx.save();
+       ctx.globalAlpha = 0.04;
+       const imageData = ctx.createImageData(w, h);
+       const data = imageData.data;
+       for (let i = 0; i < data.length; i += 4) {
+           const noise = Math.random() * 255;
+           data[i] = noise;
+           data[i + 1] = noise;
+           data[i + 2] = noise;
+           data[i + 3] = 255;
+       }
+       ctx.putImageData(imageData, 0, 0);
+       ctx.restore();
+       
+       // Vignette
+       const vignette = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, Math.max(w, h) * 0.7);
+       vignette.addColorStop(0, 'rgba(0,0,0,0)');
+       vignette.addColorStop(1, 'rgba(0,0,0,0.4)');
+       ctx.fillStyle = vignette;
+       ctx.fillRect(0, 0, w, h);
+   }
+}
+
+// Main game class
+class Game {
+   constructor() {
+       this.canvas = document.getElementById('game');
+       this.renderer = new Renderer(this.canvas);
+       this.audio = new AudioBus();
+       this.currentField = new CurrentField(window.innerWidth, window.innerHeight);
+       this.tide = new TideSystem();
+       
+       this.time = 0;
+       this.polyps = [];
+       this.prey = [];
+       this.predators = [];
+       this.rocks = [];
+       this.bounds = new Vec(window.innerWidth, window.innerHeight);
+       
+       this.lastTime = performance.now();
+       this.init();
+       this.setupControls();
+       this.loop();
+   }
+   
+   init() {
+       // Generate rocks
+       for (let i = 0; i < 15; i++) {
+           this.rocks.push(new Rock(
+               Math.random() * this.bounds.x,
+               Math.random() * this.bounds.y,
+               Math.random()
+           ));
+       }
+       
+       // Starting polyp
+       this.polyps.push(new Polyp(new Vec(this.bounds.x / 2, this.bounds.y * 0.7)));
+       
+       // Initial prey
+       for (let i = 0; i < 20; i++) {
+           const types = ['plankton', 'plankton', 'plankton', 'shrimp', 'fish'];
+           const type = types[Math.floor(Math.random() * types.length)];
+           this.prey.push(new Prey(
+               new Vec(Math.random() * this.bounds.x, Math.random() * this.bounds.y),
+               type
+           ));
+       }
+       
+       // Initial predator
+       this.predators.push(new Predator(
+           new Vec(Math.random() * this.bounds.x, Math.random() * this.bounds.y)
+       ));
+   }
+   
+   setupControls() {
+       // Mouse controls
+       this.canvas.addEventListener('click', (e) => this.handleClick(e.clientX, e.clientY));
+       
+       // Touch controls
+       let touchTimer = null;
+       let touchStart = null;
+       
+       this.canvas.addEventListener('touchstart', (e) => {
+           e.preventDefault();
+           const touch = e.touches[0];
+           touchStart = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+           touchTimer = setTimeout(() => {
+               this.handleLongPress(touch.clientX, touch.clientY);
+               touchTimer = null;
+           }, 500);
+       });
+       
+       this.canvas.addEventListener('touchend', (e) => {
+           e.preventDefault();
+           if (touchTimer) {
+               clearTimeout(touchTimer);
+               if (Date.now() - touchStart.time < 500) {
+                   this.handleClick(touchStart.x, touchStart.y);
+               }
+           }
+       });
+       
+       this.canvas.addEventListener('touchmove', (e) => {
+           e.preventDefault();
+           if (touchTimer) {
+               clearTimeout(touchTimer);
+               touchTimer = null;
+           }
+       });
+       
+       // Keyboard
+       window.addEventListener('keydown', (e) => {
+           if (e.key === 'r' || e.key === 'R') {
+               this.reset();
+           }
+       });
+   }
+   
+   handleClick(x, y) {
+       const worldPos = new Vec(x, y).sub(this.renderer.camOffset);
+       
+       // Check if clicking on prey near a polyp
+       let stung = false;
+       for (const polyp of this.polyps) {
+           if (!polyp.alive || polyp.cooldown > 0) continue;
+           
+           for (let i = this.prey.length - 1; i >= 0; i--) {
+               const p = this.prey[i];
+               if (p.pos.dist(worldPos) < p.radius + 10) {
+                   if (polyp.sting(p, this.audio)) {
+                       this.prey.splice(i, 1);
+                       this.renderer.addBubbles(p.pos, 3);
+                       stung = true;
+                       break;
+                   }
+               }
+           }
+           if (stung) break;
+       }
+       
+       // If not stinging, try to clone
+       if (!stung) {
+           this.tryClone(worldPos);
+       }
+   }
+   
+   handleLongPress(x, y) {
+       const worldPos = new Vec(x, y).sub(this.renderer.camOffset);
+       this.tryClone(worldPos);
+   }
+   
+   tryClone(targetPos) {
+       // Find nearest polyp that can clone
+       let nearest = null;
+       let nearestDist = Infinity;
+       
+       for (const polyp of this.polyps) {
+           if (!polyp.alive || !polyp.canClone()) continue;
+           const dist = polyp.pos.dist(targetPos);
+           if (dist < nearestDist) {
+               nearest = polyp;
+               nearestDist = dist;
+           }
+       }
+       
+       if (nearest && nearestDist < 150) {
+           // Check if position is valid (on rock)
+           let onRock = false;
+           for (const rock of this.rocks) {
+               if (new Vec(rock.x, rock.y).dist(targetPos) < 50) {
+                   onRock = true;
+                   break;
+               }
+           }
+           
+           if (onRock) {
+               const newPolyp = nearest.clone(targetPos, this.audio);
+               if (newPolyp) {
+                   this.polyps.push(newPolyp);
+                   this.renderer.addBubbles(targetPos, 10);
+               }
+           }
+       }
+   }
+   
+   reset() {
+       this.polyps = [];
+       this.prey = [];
+       this.predators = [];
+       this.init();
+   }
+   
+   update(dt) {
+       this.time += dt;
+       
+       // Update systems
+       this.currentField.update(dt);
+       this.tide.update(dt);
+       this.renderer.update(dt);
+       this.audio.updateTide(this.tide.getLevel());
+       
+       const waterline = this.tide.getWaterline(this.bounds.y);
+       
+       // Update entities
+       this.polyps = this.polyps.filter(p => {
+           if (p.alive) p.update(dt, this.tide, waterline);
+           return p.alive;
+       });
+       
+       this.prey.forEach(p => p.update(dt, this.currentField, this.polyps, this.bounds));
+       this.predators.forEach(p => p.update(dt, this.currentField, this.polyps, this.bounds));
+       
+       // Spawn new prey
+       if (Math.random() < dt * 0.5 && this.prey.length < 50) {
+           const types = ['plankton', 'plankton', 'plankton', 'shrimp', 'fish'];
+           const type = types[Math.floor(Math.random() * types.length)];
+           const edge = Math.random() < 0.5;
+           const pos = edge ? 
+               new Vec(Math.random() < 0.5 ? 0 : this.bounds.x, Math.random() * this.bounds.y) :
+               new Vec(Math.random() * this.bounds.x, Math.random() < 0.5 ? 0 : this.bounds.y);
+           
+           this.prey.push(new Prey(pos, type));
+           this.audio.playPlink();
+       }
+       
+       // Rare surge
+       if (this.tide.surgeActive && Math.random() < dt) {
+           this.audio.playCrash();
+           this.renderer.addBubbles(new Vec(Math.random() * this.bounds.x, waterline), 20);
+       }
+       
+       // TODO: Seabird predator
+       // TODO: Sea star implementation
+   }
+   
+   loop() {
+       const now = performance.now();
+       const dt = Math.min((now - this.lastTime) / 1000, 0.1);
+       this.lastTime = now;
+       
+       this.update(dt);
+       this.renderer.render(this);
+       
+       requestAnimationFrame(() => this.loop());
+   }
+}
+
+// Start game when loaded
+window.addEventListener('load', () => {
+   new Game();
+});
+</script>
 </body>
 </html>
