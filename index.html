@@ -1,902 +1,911 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Coral Reef Simulation</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #001f3f; /* Deep sea blue */
-            font-family: 'Inter', sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-        }
-        #simulationCanvas {
-            display: block;
-            background-color: #003366; /* Slightly lighter sea blue for canvas */
-            border-radius: 0.5rem; /* Rounded corners for the canvas */
-            box-shadow: 0 0 20px rgba(0,191,255,0.5); /* DeepSkyBlue glow */
-        }
-        .controls {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: rgba(0, 0, 0, 0.7);
-            padding: 10px 20px;
-            border-radius: 10px;
-            display: flex;
-            gap: 10px;
-            z-index: 10;
-        }
-        .controls button, .controls input, .controls label {
-            padding: 8px 12px;
-            border-radius: 5px;
-            border: none;
-            background-color: #0077cc; /* Ocean blue button */
-            color: white;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        .controls button:hover {
-            background-color: #005fa3;
-        }
-        .controls input[type="range"] {
-            padding: 0;
-        }
-        .controls label {
-            background-color: transparent;
-        }
-        .info-panel {
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            background-color: rgba(0,0,0,0.6);
-            color: white;
-            padding: 10px;
-            border-radius: 8px;
-            font-size: 12px;
-            max-width: 250px;
-            z-index: 10;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>POLYP - Tide Pool Anemone Life Simulator</title>
+<!--
+MIT License - POLYP Game
+Deploy to GitHub Pages: Create repo, upload this file as index.html, enable Pages in Settings
+Controls: Click/tap to sting, click empty space to clone, R to reset, long-press for mobile clone
+-->
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { 
+  background: #001122; 
+  overflow: hidden; 
+  font-family: monospace;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas { 
+  display: block; 
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+#info {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  color: #4fc3f7;
+  font-size: 12px;
+  opacity: 0.7;
+  pointer-events: none;
+}
+</style>
 </head>
 <body>
-    <div class="info-panel" id="infoPanel">
-        <h2 class="text-lg font-semibold mb-2">Coral Reef Observer</h2>
-        <p>Welcome to your personal coral reef! Watch as life unfolds in this dynamic ecosystem.</p>
-        <p class="mt-2">Tips: Adjust fish count for performance. Try clicking to create a gentle ripple!</p>
-        <p class="mt-1">Fish Count: <span id="fishCountDisplay">0</span></p>
-    </div>
+<canvas id="canvas"></canvas>
+<canvas id="water" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
+<div id="info">POLYP: Click to sting • Empty space to clone • R to reset</div>
 
-    <canvas id="simulationCanvas"></canvas>
+<script>
+class Vec {
+  constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+  add(v) { return new Vec(this.x + v.x, this.y + v.y); }
+  sub(v) { return new Vec(this.x - v.x, this.y - v.y); }
+  mul(s) { return new Vec(this.x * s, this.y * s); }
+  dot(v) { return this.x * v.x + this.y * v.y; }
+  len() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+  norm() { const l = this.len(); return l > 0 ? this.mul(1/l) : new Vec(); }
+  dist(v) { return this.sub(v).len(); }
+}
 
-    <div class="controls">
-        <label for="fishSlider">Fish:</label>
-        <input type="range" id="fishSlider" min="10" max="200" value="50" step="10">
-        <button id="resetSimButton">Reset Simulation</button>
-    </div>
+class CurrentField {
+  constructor() {
+    this.time = 0;
+    this.strength = 0.3;
+  }
+  
+  update(dt) {
+    this.time += dt;
+  }
+  
+  getFlow(pos) {
+    const x = pos.x * 0.01 + this.time * 0.2;
+    const y = pos.y * 0.01 + this.time * 0.15;
+    return new Vec(
+      Math.sin(x + Math.cos(y * 2)) * this.strength,
+      Math.cos(y + Math.sin(x * 1.5)) * this.strength * 0.7
+    );
+  }
+}
 
-    <script>
-        const canvas = document.getElementById('simulationCanvas');
-        const ctx = canvas.getContext('2d');
+class TideSystem {
+  constructor() {
+    this.time = 0;
+    this.period = 180; // 3 minutes
+    this.baseWaterLevel = 0.7;
+    this.amplitude = 0.25;
+  }
+  
+  update(dt) {
+    this.time += dt;
+  }
+  
+  getWaterLevel() {
+    return this.baseWaterLevel + Math.sin(this.time * Math.PI * 2 / this.period) * this.amplitude;
+  }
+  
+  isSubmerged(y, height) {
+    return y / height > this.getWaterLevel();
+  }
+}
 
-        // --- Global Settings ---
-        let fishCount = 50;
-        const MAX_FISH = 200;
-        const MIN_FISH = 10;
+class AudioBus {
+  constructor() {
+    this.ctx = null;
+    this.enabled = false;
+    this.gainNode = null;
+    this.init();
+  }
+  
+  async init() {
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.gainNode = this.ctx.createGain();
+      this.gainNode.gain.value = 0.3;
+      this.gainNode.connect(this.ctx.destination);
+      this.enabled = true;
+      
+      // Create ambient drone
+      this.createDrone();
+    } catch(e) {
+      console.warn('Audio disabled:', e);
+    }
+  }
+  
+  createDrone() {
+    if (!this.enabled) return;
+    
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    
+    osc.type = 'sine';
+    osc.frequency.value = 60;
+    filter.type = 'lowpass';
+    filter.frequency.value = 200;
+    gain.gain.value = 0.1;
+    
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.gainNode);
+    osc.start();
+    
+    // Subtle frequency modulation
+    setInterval(() => {
+      if (osc.frequency) {
+        osc.frequency.setValueAtTime(60 + Math.sin(Date.now() * 0.001) * 5, this.ctx.currentTime);
+      }
+    }, 100);
+  }
+  
+  play(type) {
+    if (!this.enabled) return;
+    
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    
+    switch(type) {
+      case 'sting':
+        osc.frequency.value = 800;
+        gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+        break;
+      case 'clone':
+        osc.frequency.value = 400;
+        gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+        break;
+      case 'eat':
+        osc.frequency.value = 200;
+        gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+        break;
+    }
+    
+    osc.connect(gain);
+    gain.connect(this.gainNode);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.5);
+  }
+}
 
-        // --- Entity Arrays ---
-        let fishArray = [];
-        let coralArray = [];
-        let plantArray = [];
-        let bubbleArray = [];
-        let particleArray = []; // For plankton/detritus
-        let lightRayArray = [];
-        let rippleEffects = [];
+class Polyp {
+  constructor(pos) {
+    this.pos = pos;
+    this.energy = 25;
+    this.maxEnergy = 100;
+    this.stingCooldown = 0;
+    this.stingRange = 40;
+    this.tentacles = [];
+    this.size = 8 + Math.random() * 4;
+    this.hue = 180 + Math.random() * 60;
+    this.age = 0;
+    this.isDead = false;
+    this.digestCooldown = 0;
+    this.glowIntensity = 0;
+    
+    // Generate tentacles
+    for (let i = 0; i < 8; i++) {
+      this.tentacles.push({
+        angle: (i / 8) * Math.PI * 2,
+        length: this.size * 1.5 + Math.random() * 10,
+        sway: Math.random() * Math.PI * 2
+      });
+    }
+  }
+  
+  update(dt, game) {
+    this.age += dt;
+    this.stingCooldown = Math.max(0, this.stingCooldown - dt);
+    this.digestCooldown = Math.max(0, this.digestCooldown - dt);
+    this.glowIntensity = Math.max(0, this.glowIntensity - dt * 2);
+    
+    // Check if submerged
+    if (!game.tide.isSubmerged(this.pos.y, game.canvas.height)) {
+      this.energy -= dt * 5; // Drying damage
+      if (this.energy <= 0) this.isDead = true;
+    }
+    
+    // Tentacle animation
+    this.tentacles.forEach(t => {
+      t.sway += dt * 2;
+    });
+    
+    // Passive energy decay
+    this.energy = Math.max(0, this.energy - dt * 0.5);
+  }
+  
+  canSting() {
+    return this.stingCooldown <= 0 && this.energy > 5;
+  }
+  
+  sting(target) {
+    if (!this.canSting()) return false;
+    
+    const dist = this.pos.dist(target.pos);
+    if (dist <= this.stingRange) {
+      this.stingCooldown = 2;
+      this.energy -= 5;
+      this.glowIntensity = 1;
+      return true;
+    }
+    return false;
+  }
+  
+  digest(prey) {
+    if (this.digestCooldown > 0) return;
+    
+    this.energy = Math.min(this.maxEnergy, this.energy + prey.energy);
+    this.digestCooldown = 1;
+    this.glowIntensity = 0.5;
+  }
+  
+  canClone() {
+    return this.energy >= 50;
+  }
+  
+  clone(pos) {
+    if (!this.canClone()) return null;
+    
+    this.energy -= 50;
+    const newPolyp = new Polyp(pos);
+    newPolyp.hue = this.hue + (Math.random() - 0.5) * 20;
+    return newPolyp;
+  }
+}
 
-        // --- Mouse Interaction ---
-        let mouse = { x: undefined, y: undefined, clicked: false, clickX: 0, clickY: 0 };
-        canvas.addEventListener('mousemove', (event) => {
-            const rect = canvas.getBoundingClientRect();
-            mouse.x = event.clientX - rect.left;
-            mouse.y = event.clientY - rect.top;
-        });
-        canvas.addEventListener('mouseleave', () => {
-            mouse.x = undefined;
-            mouse.y = undefined;
-        });
-        canvas.addEventListener('click', (event) => {
-            const rect = canvas.getBoundingClientRect();
-            mouse.clicked = true; // Flag that a click happened
-            mouse.clickX = event.clientX - rect.left;
-            mouse.clickY = event.clientY - rect.top;
-            createRipple(mouse.clickX, mouse.clickY);
-        });
+class Prey {
+  constructor(pos, type = 'plankton') {
+    this.pos = pos;
+    this.vel = new Vec((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20);
+    this.type = type;
+    this.energy = type === 'fish' ? 25 : type === 'shrimp' ? 15 : 8;
+    this.size = type === 'fish' ? 6 : type === 'shrimp' ? 4 : 2;
+    this.health = type === 'fish' ? 3 : 1;
+    this.age = 0;
+    this.isDead = false;
+    this.isStunned = false;
+    this.stunTime = 0;
+    this.color = type === 'fish' ? '#87CEEB' : type === 'shrimp' ? '#FFB6C1' : '#98FB98';
+    this.speed = type === 'fish' ? 30 : type === 'shrimp' ? 20 : 10;
+  }
+  
+  update(dt, game) {
+    this.age += dt;
+    
+    if (this.isStunned) {
+      this.stunTime -= dt;
+      if (this.stunTime <= 0) {
+        this.isStunned = false;
+      }
+      return;
+    }
+    
+    // Simple AI: avoid polyps, follow currents
+    let avoidance = new Vec();
+    game.polyps.forEach(polyp => {
+      const diff = this.pos.sub(polyp.pos);
+      const dist = diff.len();
+      if (dist < 60 && dist > 0) {
+        avoidance = avoidance.add(diff.norm().mul(200 / (dist + 1)));
+      }
+    });
+    
+    const currentForce = game.currents.getFlow(this.pos).mul(this.speed);
+    const totalForce = avoidance.add(currentForce);
+    
+    this.vel = this.vel.add(totalForce.mul(dt)).mul(0.98);
+    this.pos = this.pos.add(this.vel.mul(dt));
+    
+    // Wrap around screen
+    if (this.pos.x < 0) this.pos.x = game.canvas.width;
+    if (this.pos.x > game.canvas.width) this.pos.x = 0;
+    if (this.pos.y < 0) this.pos.y = game.canvas.height;
+    if (this.pos.y > game.canvas.height) this.pos.y = 0;
+    
+    // Die if out of water too long
+    if (!game.tide.isSubmerged(this.pos.y, game.canvas.height)) {
+      this.health -= dt * 2;
+      if (this.health <= 0) this.isDead = true;
+    }
+  }
+  
+  takeDamage() {
+    this.health--;
+    this.isStunned = true;
+    this.stunTime = 1;
+    if (this.health <= 0) {
+      this.isDead = true;
+    }
+  }
+}
 
-
-        // --- Helper Functions ---
-        function random(min, max) {
-            return Math.random() * (max - min) + min;
+class Predator {
+  constructor(pos, type = 'whelk') {
+    this.pos = pos;
+    this.vel = new Vec();
+    this.type = type;
+    this.size = 8;
+    this.age = 0;
+    this.target = null;
+    this.attackCooldown = 0;
+  }
+  
+  update(dt, game) {
+    this.age += dt;
+    this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+    
+    // Hunt nearest polyp
+    if (!this.target || this.target.isDead) {
+      let nearest = null;
+      let minDist = Infinity;
+      
+      game.polyps.forEach(polyp => {
+        const dist = this.pos.dist(polyp.pos);
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = polyp;
         }
+      });
+      
+      this.target = nearest;
+    }
+    
+    if (this.target) {
+      const dir = this.target.pos.sub(this.pos).norm();
+      this.vel = this.vel.add(dir.mul(15 * dt)).mul(0.95);
+      
+      // Attack if close enough
+      if (this.pos.dist(this.target.pos) < 20 && this.attackCooldown <= 0) {
+        this.target.energy -= 10;
+        this.attackCooldown = 3;
+      }
+    }
+    
+    this.pos = this.pos.add(this.vel.mul(dt));
+  }
+}
 
-        function randomInt(min, max) {
-            return Math.floor(random(min, max + 1));
-        }
-
-        function getRandomColor(palette) {
-            return palette[Math.floor(Math.random() * palette.length)];
-        }
+class Renderer {
+  constructor(canvas, waterCanvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.waterCanvas = waterCanvas;
+    this.waterCtx = waterCanvas.getContext('2d');
+    this.cameraOffset = new Vec();
+    this.time = 0;
+    
+    // Try to get WebGL context for water effects
+    this.gl = waterCanvas.getContext('webgl') || waterCanvas.getContext('experimental-webgl');
+    this.hasWebGL = !!this.gl;
+    
+    if (this.hasWebGL) {
+      this.initWebGL();
+    }
+  }
+  
+  initWebGL() {
+    const gl = this.gl;
+    
+    // Simple vertex shader
+    const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vertexShader, `
+      attribute vec2 position;
+      void main() {
+        gl_Position = vec4(position, 0.0, 1.0);
+      }
+    `);
+    gl.compileShader(vertexShader);
+    
+    // Water caustics fragment shader
+    const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fragmentShader, `
+      precision mediump float;
+      uniform float time;
+      uniform vec2 resolution;
+      uniform float waterLevel;
+      
+      void main() {
+        vec2 uv = gl_FragCoord.xy / resolution.xy;
+        vec2 p = uv * 8.0;
         
-        // --- Color Palettes ---
-        const fishPalette = ['#FF6B6B', '#FFD166', '#06D6A0', '#118AB2', '#EF476F', '#F78C6B', '#7F2CCB', '#FF9F1C'];
-        const coralPalette = {
-            brain: ['#D9A0A0', '#C78D8D', '#B57A7A'], // Rosy browns
-            staghorn: ['#AEE8CC', '#98D7B8', '#82C6A4'], // Seafoam greens
-            fan: ['#FCA3B7', '#FB8DA0', '#F97789'], // Soft pinks/reds
-            pillar: ['#F0E68C', '#E0D878', '#D0CA64'], // Sandy yellows
-            flower: ['#C3AED6', '#B09AC9', '#9E86BC'] // Lavender purples - will be base for PlayerPolyp
-        };
-        const plantPalette = ['#5FAD56', '#4E9A44', '#3D8732', '#70C1B3']; // Greens and teals
-
-        // --- Entity Classes/Factories ---
-
-        // Ripple Effect
-        class RippleEffect {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y;
-                this.radius = 5;
-                this.maxRadius = random(40, 70);
-                this.speed = random(0.5, 1);
-                this.opacity = 1;
-                this.lineWidth = random(2,4);
-            }
-
-            update() {
-                this.radius += this.speed;
-                this.opacity -= 0.02;
-            }
-
-            draw() {
-                if (this.opacity <= 0) return;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(200, 220, 255, ${this.opacity})`;
-                ctx.lineWidth = this.lineWidth;
-                ctx.stroke();
-            }
-        }
-
-        function createRipple(x, y) {
-            if (rippleEffects.length < 10) { // Limit concurrent ripples
-                rippleEffects.push(new RippleEffect(x,y));
-            }
-        }
-
-
-        // Light Rays
-        class LightRay {
-            constructor() {
-                this.x = random(0, canvas.width);
-                this.y = 0;
-                this.length = random(canvas.height * 0.6, canvas.height * 1.2);
-                this.width = random(1, 3); // Slightly thinner on average
-                this.opacity = random(0.03, 0.15); // Slightly more subtle
-                this.baseAngle = random(-0.05, 0.05); // Initial slight angle
-                this.angleSway = random(0.01, 0.03); // How much the angle sways
-                this.angleSwaySpeed = random(0.0001, 0.0005);
-                this.driftSpeed = random(-0.05, 0.05); // Slow horizontal drift
-                this.time = random(0, Math.PI * 2); // For shimmering effect
-            }
-
-            update() {
-                this.time += 0.01; // Consistent shimmer speed
-                this.x += this.driftSpeed;
-                this.currentAngle = this.baseAngle + Math.sin(this.time * this.angleSwaySpeed) * this.angleSway;
-
-                // Reset if drifted too far off screen
-                if (this.x < -this.width * 5 || this.x > canvas.width + this.width * 5) {
-                     this.x = random(0, canvas.width); // Re-randomize x position
-                     this.baseAngle = random(-0.05, 0.05); // And angle
-                }
-            }
-
-            draw() {
-                const currentOpacity = this.opacity * (0.6 + Math.sin(this.time * 0.5) * 0.4); // Shimmering opacity
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                ctx.lineTo(this.x + Math.sin(this.currentAngle) * this.length, this.y + Math.cos(this.currentAngle) * this.length);
-                ctx.strokeStyle = `rgba(255, 255, 220, ${currentOpacity})`; // Warm yellow light
-                ctx.lineWidth = this.width;
-                ctx.stroke();
-            }
-        }
-
-        // Coral
-        class Coral {
-            constructor(x, y, type) {
-                this.x = x;
-                this.y = y;
-                this.type = type;
-                this.baseColor = getRandomColor(coralPalette[type]);
-                this.timeOffset = random(0, 1000); // For varied animation timing
-                
-                // Type-specific properties
-                switch(this.type) {
-                    case 'brain':
-                        this.radius = random(20, 50);
-                        this.segments = randomInt(5, 10);
-                        break;
-                    case 'staghorn':
-                        this.branches = randomInt(3, 7);
-                        this.branchLength = random(30, 80);
-                        this.branchWidth = random(5, 15);
-                        break;
-                    case 'fan':
-                        this.width = random(50, 120);
-                        this.height = random(40, 100);
-                        this.segments = randomInt(10, 20);
-                        break;
-                    case 'pillar':
-                        this.pillars = randomInt(2, 5);
-                        this.pillarHeight = random(50, 150);
-                        this.pillarWidth = random(15, 30);
-                        break;
-                    case 'flower': // Anemone-like coral
-                        this.petalCount = randomInt(8, 14); // More petals for lushness
-                        this.petalLength = random(20, 40); // Renamed from petalRadius for clarity
-                        this.coreRadius = random(6, 12);
-                        this.swayFactor = random(0.005, 0.02); // Reduced sway factor
-                        this.swaySpeed = 0.0005; // Reduced sway speed
-                        this.swayAngle = 0;
-                        break;
-                }
-            }
-
-            draw() {
-                ctx.save();
-                ctx.translate(this.x, this.y);
-
-                switch(this.type) {
-                    case 'brain':
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.radius, Math.PI, 0); // Half-circle base
-                        ctx.fillStyle = this.baseColor;
-                        ctx.fill();
-                        // Add some texture/pattern
-                        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-                        ctx.lineWidth = 2;
-                        for (let i = 0; i < this.segments; i++) {
-                            ctx.beginPath();
-                            ctx.arc(0, 0, this.radius * (i / this.segments), Math.PI + random(0.1,0.3), -random(0.1,0.3), false);
-                            ctx.stroke();
-                        }
-                        break;
-                    case 'staghorn':
-                        for (let i = 0; i < this.branches; i++) {
-                            ctx.beginPath();
-                            const angle = (Math.PI / this.branches) * i - Math.PI / 2 + random(-0.2, 0.2) - Math.PI/4; // Point upwards
-                            ctx.moveTo(0, 0);
-                            ctx.lineTo(Math.cos(angle) * this.branchLength, Math.sin(angle) * this.branchLength);
-                            ctx.lineWidth = this.branchWidth - i*0.5; // Tapering
-                            ctx.strokeStyle = this.baseColor;
-                            ctx.lineCap = 'round';
-                            ctx.stroke();
-                        }
-                        break;
-                    case 'fan':
-                        ctx.beginPath();
-                        ctx.moveTo(0,0);
-                        for(let i = 0; i <= this.segments; i++) {
-                            const angle = (Math.PI / this.segments) * i - Math.PI/2 - Math.PI/4;
-                            const x1 = (this.width/2) * Math.cos(angle);
-                            const y1 = -this.height * Math.sin(Math.abs(angle)); 
-                            ctx.lineTo(x1, y1);
-                        }
-                        ctx.closePath();
-                        ctx.fillStyle = this.baseColor;
-                        ctx.fill();
-                        // Add some lines for texture
-                        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-                        ctx.lineWidth = 1;
-                         for(let i = 0; i <= this.segments; i+=2) {
-                            const angle = (Math.PI / this.segments) * i - Math.PI/2 - Math.PI/4;
-                            const x1 = (this.width/2) * Math.cos(angle);
-                            const y1 = -this.height * Math.sin(Math.abs(angle)); 
-                            ctx.beginPath();
-                            ctx.moveTo(0,0);
-                            ctx.lineTo(x1, y1);
-                            ctx.stroke();
-                        }
-                        break;
-                    case 'pillar':
-                        for (let i = 0; i < this.pillars; i++) {
-                            const xOffset = (i - (this.pillars - 1) / 2) * (this.pillarWidth * 1.2);
-                            ctx.fillStyle = this.baseColor;
-                            ctx.beginPath();
-                            ctx.rect(xOffset - this.pillarWidth/2, -this.pillarHeight, this.pillarWidth, this.pillarHeight);
-                            ctx.fill();
-                            // Add cap
-                            ctx.beginPath();
-                            ctx.arc(xOffset, -this.pillarHeight, this.pillarWidth/2, Math.PI, 0);
-                            ctx.fill();
-                        }
-                        break;
-                    case 'flower': // Anemone-like coral
-                        this.swayAngle = Math.sin(Date.now() * this.swaySpeed + this.x * 0.1 + this.timeOffset) * this.swayFactor;
-                        ctx.fillStyle = this.baseColor;
-                        for (let i = 0; i < this.petalCount; i++) {
-                            const angle = (Math.PI * 2 / this.petalCount) * i + this.swayAngle + Math.sin(Date.now() * this.swaySpeed * 0.5 + i*0.5 + this.timeOffset) * this.swayFactor * 2; // Add individual petal flutter
-                            const currentPetalLength = this.petalLength * (0.8 + Math.sin(Date.now() * this.swaySpeed * 0.7 + i*0.8 + this.timeOffset) * 0.2); // Pulsing length
-
-                            const x1 = Math.cos(angle) * this.coreRadius;
-                            const y1 = Math.sin(angle) * this.coreRadius;
-                            const x2 = Math.cos(angle) * (this.coreRadius + currentPetalLength);
-                            const y2 = Math.sin(angle) * (this.coreRadius + currentPetalLength);
-                            
-                            ctx.beginPath();
-                            ctx.moveTo(x1, y1);
-                            // More organic petal shape
-                            ctx.quadraticCurveTo(
-                                Math.cos(angle + 0.1) * (this.coreRadius + currentPetalLength * 0.6),
-                                Math.sin(angle + 0.1) * (this.coreRadius + currentPetalLength * 0.6),
-                                x2, y2
-                            );
-                            ctx.quadraticCurveTo(
-                                Math.cos(angle - 0.1) * (this.coreRadius + currentPetalLength * 0.6),
-                                Math.sin(angle - 0.1) * (this.coreRadius + currentPetalLength * 0.6),
-                                x1, y1
-                            );
-                            ctx.fill();
-                        }
-                        // Draw a slightly darker core
-                        ctx.beginPath();
-                        ctx.arc(0,0, this.coreRadius, 0, Math.PI * 2);
-                        ctx.fillStyle = `rgba(0,0,0,0.15)`;
-                        ctx.fill();
-                        break;
-                }
-                ctx.restore();
-            }
-        }
-
-        // Fish
-        class Fish {
-            constructor(species) {
-                this.species = species; 
-                this.x = random(0, canvas.width);
-                this.y = random(canvas.height * 0.1, canvas.height * 0.8); 
-                this.size = this.species === 'small_schooling' ? random(5, 10) : random(10, 20);
-                this.color1 = getRandomColor(fishPalette);
-                this.color2 = getRandomColor(fishPalette.filter(c => c !== this.color1)); 
-                this.speed = random(0.5, 2);
-                this.maxSpeed = this.speed * 1.2; // Max speed for fleeing etc.
-                this.angle = random(0, Math.PI * 2);
-                this.vx = Math.cos(this.angle) * this.speed;
-                this.vy = Math.sin(this.angle) * this.speed;
-                this.time = random(0,100); 
-
-                // Schooling behavior
-                this.schoolId = (this.species === 'small_schooling' && Math.random() < 0.7) ? Math.floor(random(0, fishCount / 10)) : null;
-                this.perceptionRadius = 50;
-                this.separationDistance = 20; // How close before strongly separating
-                this.maxForce = 0.05; 
-            }
-            
-            applyForce(force) {
-                this.vx += force.x;
-                this.vy += force.y;
-            }
-
-            // Boids-like behaviors
-            separation(others) {
-                let steer = {x:0, y:0};
-                let count = 0;
-                for (let other of others) {
-                    let d = Math.hypot(this.x - other.x, this.y - other.y);
-                    if (d > 0 && d < this.separationDistance) {
-                        let diff = {x: this.x - other.x, y: this.y - other.y};
-                        diff.x /= d; // Normalize
-                        diff.y /= d;
-                        diff.x /= d; // Weight by distance (stronger repulsion when closer)
-                        diff.y /= d;
-                        steer.x += diff.x;
-                        steer.y += diff.y;
-                        count++;
-                    }
-                }
-                if (count > 0) {
-                    steer.x /= count;
-                    steer.y /= count;
-                }
-                const mag = Math.hypot(steer.x, steer.y);
-                if (mag > 0) {
-                    steer.x = (steer.x / mag) * this.maxSpeed;
-                    steer.y = (steer.y / mag) * this.maxSpeed;
-                    steer.x -= this.vx;
-                    steer.y -= this.vy;
-                    const steerMag = Math.hypot(steer.x, steer.y);
-                    if (steerMag > this.maxForce) {
-                        steer.x = (steer.x / steerMag) * this.maxForce;
-                        steer.y = (steer.y / steerMag) * this.maxForce;
-                    }
-                }
-                return steer;
-            }
-
-            align(others) {
-                let sum = {x:0, y:0};
-                let count = 0;
-                for (let other of others) {
-                    let d = Math.hypot(this.x - other.x, this.y - other.y);
-                    if (d > 0 && d < this.perceptionRadius) {
-                        sum.x += other.vx;
-                        sum.y += other.vy;
-                        count++;
-                    }
-                }
-                if (count > 0) {
-                    sum.x /= count;
-                    sum.y /= count;
-                    const mag = Math.hypot(sum.x, sum.y);
-                    if (mag > 0) {
-                        sum.x = (sum.x / mag) * this.maxSpeed;
-                        sum.y = (sum.y / mag) * this.maxSpeed;
-                    }
-                    let steer = {x: sum.x - this.vx, y: sum.y - this.vy};
-                    const steerMag = Math.hypot(steer.x, steer.y);
-                     if (steerMag > this.maxForce) {
-                        steer.x = (steer.x / steerMag) * this.maxForce;
-                        steer.y = (steer.y / steerMag) * this.maxForce;
-                    }
-                    return steer;
-                }
-                return {x:0, y:0};
-            }
-
-            cohesion(others) {
-                let sum = {x:0, y:0};
-                let count = 0;
-                for (let other of others) {
-                    let d = Math.hypot(this.x - other.x, this.y - other.y);
-                    if (d > 0 && d < this.perceptionRadius) {
-                        sum.x += other.x;
-                        sum.y += other.y;
-                        count++;
-                    }
-                }
-                if (count > 0) {
-                    sum.x /= count;
-                    sum.y /= count;
-                    let desired = {x: sum.x - this.x, y: sum.y - this.y};
-                    const mag = Math.hypot(desired.x, desired.y);
-                    if (mag > 0) {
-                        desired.x = (desired.x / mag) * this.maxSpeed;
-                        desired.y = (desired.y / mag) * this.maxSpeed;
-                    }
-                    let steer = {x: desired.x - this.vx, y: desired.y - this.vy};
-                    const steerMag = Math.hypot(steer.x, steer.y);
-                     if (steerMag > this.maxForce) {
-                        steer.x = (steer.x / steerMag) * this.maxForce;
-                        steer.y = (steer.y / steerMag) * this.maxForce;
-                    }
-                    return steer;
-                }
-                return {x:0, y:0};
-            }
-
-
-            update(allFish) {
-                this.time += 0.1;
-
-                if (this.schoolId !== null) {
-                    const schoolMates = allFish.filter(f => f.schoolId === this.schoolId && f !== this);
-                    if (schoolMates.length > 0) {
-                        let sep = this.separation(schoolMates);
-                        let ali = this.align(schoolMates);
-                        let coh = this.cohesion(schoolMates);
-
-                        // Apply weights
-                        sep.x *= 1.8; sep.y *= 1.8; 
-                        ali.x *= 1.0; ali.y *= 1.0;
-                        coh.x *= 1.0; coh.y *= 1.0;
-
-                        this.applyForce(sep);
-                        this.applyForce(ali);
-                        this.applyForce(coh);
-                    }
-                } else { 
-                    if (Math.random() < 0.03) { // Solitary fish less frequent random turns
-                        let desiredAngle = this.angle + random(-0.6, 0.6);
-                        let desiredVel = { x: Math.cos(desiredAngle) * this.speed, y: Math.sin(desiredAngle) * this.speed };
-                        let steer = { x: desiredVel.x - this.vx, y: desiredVel.y - this.vy };
-                        const steerMag = Math.hypot(steer.x, steer.y);
-                        if (steerMag > this.maxForce * 0.5) { // Weaker steering for random turns
-                           steer.x = (steer.x / steerMag) * this.maxForce * 0.5;
-                           steer.y = (steer.y / steerMag) * this.maxForce * 0.5;
-                        }
-                        this.applyForce(steer);
-                    }
-                }
-
-                // Mouse interaction: gentle push
-                if (mouse.x !== undefined && mouse.y !== undefined) {
-                    const dxMouse = this.x - mouse.x;
-                    const dyMouse = this.y - mouse.y;
-                    const distMouse = Math.hypot(dxMouse, dyMouse);
-                    if (distMouse < 60) { // Increased interaction radius
-                        const forceMagnitude = (60 - distMouse) / 60 * 0.8; // Stronger push
-                        let force = {
-                            x: (dxMouse / distMouse) * forceMagnitude,
-                            y: (dyMouse / distMouse) * forceMagnitude
-                        };
-                        this.applyForce(force);
-                    }
-                }
-                
-                // Limit speed
-                const currentSpeed = Math.hypot(this.vx, this.vy);
-                if (currentSpeed > this.maxSpeed) {
-                    this.vx = (this.vx / currentSpeed) * this.maxSpeed;
-                    this.vy = (this.vy / currentSpeed) * this.maxSpeed;
-                } else if (currentSpeed < this.speed * 0.5 && this.schoolId === null) { // Min speed for solitary
-                    this.vx = (this.vx / currentSpeed) * this.speed * 0.5;
-                    this.vy = (this.vy / currentSpeed) * this.speed * 0.5;
-                }
-
-
-                this.x += this.vx;
-                this.y += this.vy;
-
-                // Boundary checks 
-                const padding = this.size * 3; 
-                const turnForce = 0.1; // Force to turn fish away from boundaries
-
-                if (this.x < padding) { this.vx += turnForce; }
-                if (this.x > canvas.width - padding) { this.vx -= turnForce; }
-                if (this.y < padding) { this.vy += turnForce; }
-                if (this.y > canvas.height - 30 - padding) { // Avoid seabed (30 is approx seabed height)
-                    this.vy -= turnForce; 
-                    if (this.y > canvas.height - 30 - this.size) this.y = canvas.height - 30 - this.size; // Prevent going into seabed
-                }
-
-                // Fallback wrapping if they somehow escape hard
-                if (this.x < -padding*2) this.x = canvas.width + padding;
-                if (this.x > canvas.width + padding*2) this.x = -padding;
-                if (this.y < -padding*2) this.y = canvas.height + padding;
-                if (this.y > canvas.height + padding*2) this.y = -padding;
-
-
-                // Update angle based on velocity for drawing
-                if (Math.abs(this.vx) > 0.01 || Math.abs(this.vy) > 0.01) { // Only update if moving
-                    this.angle = Math.atan2(this.vy, this.vx);
-                }
-            }
-
-            draw() {
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-
-                // Body
-                ctx.beginPath();
-                ctx.ellipse(0, 0, this.size, this.size / 2, 0, 0, Math.PI * 2);
-                
-                const gradient = ctx.createLinearGradient(-this.size, 0, this.size, 0);
-                gradient.addColorStop(0, this.color1);
-                gradient.addColorStop(1, this.color2);
-                ctx.fillStyle = gradient;
-                ctx.fill();
-
-                // Tail fin
-                const tailSway = Math.sin(this.time * 0.8) * (this.size / 3.5); 
-                ctx.beginPath();
-                ctx.moveTo(-this.size * 0.7, 0); // Slightly more attached to body
-                ctx.lineTo(-this.size * 1.3, -this.size / 2.5 + tailSway); // Wider, more dynamic tail
-                ctx.lineTo(-this.size * 1.3, this.size / 2.5 + tailSway);
-                ctx.closePath();
-                ctx.fillStyle = this.color2;
-                ctx.fill();
-
-                // Dorsal fin
-                ctx.beginPath();
-                ctx.moveTo(this.size * 0.4, -this.size * 0.05);
-                ctx.quadraticCurveTo(this.size * 0.2, -this.size * 0.7, -this.size * 0.3, -this.size*0.1);
-                ctx.fillStyle = this.color1;
-                ctx.fill();
-
-                // Eye
-                ctx.beginPath();
-                ctx.arc(this.size * 0.65, 0, this.size / 7, 0, Math.PI * 2); // Slightly larger eye
-                ctx.fillStyle = 'white';
-                ctx.fill();
-                ctx.beginPath();
-                ctx.arc(this.size * 0.7, 0, this.size / 14, 0, Math.PI * 2);
-                ctx.fillStyle = 'black';
-                ctx.fill();
-
-                ctx.restore();
-            }
-        }
-
-        // Plant (Seaweed/Anemone)
-        class Plant {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y; 
-                this.segments = randomInt(5, 10);
-                this.segmentLength = random(10, 20);
-                this.maxHeight = this.segments * this.segmentLength * 0.8; 
-                this.color = getRandomColor(plantPalette);
-                this.lineWidth = random(2, 5);
-                this.swaySpeed = random(0.0005, 0.0015); // Slightly slower on average
-                this.swayAmplitude = random(0.05, 0.25); // Reduced amplitude
-                this.timeOffset = random(0, 1000); 
-            }
-
-            draw() {
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                let currentX = this.x;
-                let currentY = this.y;
-
-                for (let i = 0; i < this.segments; i++) {
-                    const sway = Math.sin(Date.now() * this.swaySpeed + this.timeOffset + i * 0.3) * this.swayAmplitude * (i+1) * 0.5; // Reduced overall sway effect
-                    const angle = -Math.PI / 2 + sway; 
-                    const nextX = currentX + Math.cos(angle) * this.segmentLength;
-                    const nextY = currentY + Math.sin(angle) * this.segmentLength;
-                    ctx.lineTo(nextX, nextY);
-                    currentX = nextX;
-                    currentY = nextY;
-                }
-                ctx.strokeStyle = this.color;
-                ctx.lineWidth = this.lineWidth;
-                ctx.lineCap = 'round';
-                ctx.stroke();
-            }
-        }
-
-        // Bubble
-        class Bubble {
-            constructor() {
-                this.x = random(0, canvas.width);
-                this.y = canvas.height + random(10, 50); 
-                this.radius = random(1, 4); // Slightly smaller max size
-                this.speedY = random(0.3, 1.5); // Slower min speed
-                this.speedX = random(-0.15, 0.15); 
-                this.opacity = random(0.2, 0.7);
-            }
-
-            update() {
-                this.y -= this.speedY;
-                this.x += this.speedX;
-                if (this.y < -this.radius * 2) { 
-                    this.y = canvas.height + random(10, 50);
-                    this.x = random(0, canvas.width);
-                    this.opacity = random(0.2, 0.7); // Reset opacity too
-                }
-            }
-
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = `rgba(200, 225, 255, ${this.opacity})`;
-                ctx.fill();
-                
-                ctx.beginPath();
-                ctx.arc(this.x - this.radius*0.3, this.y - this.radius*0.3, this.radius*0.3, 0, Math.PI*2);
-                ctx.fillStyle = `rgba(255,255,255, ${this.opacity * 0.9})`; // Brighter highlight
-                ctx.fill();
-            }
-        }
+        float caustic = 0.0;
+        caustic += sin(p.x + time * 0.5) * cos(p.y + time * 0.3);
+        caustic += sin(p.x * 2.0 + time * 0.7) * cos(p.y * 2.0 + time * 0.4) * 0.5;
+        caustic = abs(caustic);
         
-        // Particle (Plankton/Detritus)
-        class Particle {
-            constructor() {
-                this.x = random(0, canvas.width);
-                this.y = random(0, canvas.height);
-                this.size = random(0.5, 1.2); // Smaller max size
-                this.color = `rgba(200, 220, 255, ${random(0.15, 0.5)})`; 
-                this.vx = random(-0.05, 0.05); 
-                this.vy = random(-0.05, 0.05);
-            }
-
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-
-                if (this.x < 0) this.x = canvas.width;
-                if (this.x > canvas.width) this.x = 0;
-                if (this.y < 0) this.y = canvas.height;
-                if (this.y > canvas.height) this.y = 0;
-            }
-
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = this.color;
-                ctx.fill();
-            }
-        }
-
-
-        // --- Initialization ---
-        function init() {
-            canvas.width = window.innerWidth * 0.9; 
-            canvas.height = window.innerHeight * 0.75; 
-            if (canvas.width < 400) canvas.width = 400; 
-            if (canvas.height < 300) canvas.height = 300; 
-
-            fishArray = [];
-            coralArray = [];
-            plantArray = [];
-            bubbleArray = [];
-            particleArray = [];
-            lightRayArray = [];
-            rippleEffects = [];
-
-            for (let i = 0; i < 12; i++) { // Reduced number of rays for performance, more dynamic ones
-                lightRayArray.push(new LightRay());
-            }
-
-            const seabedY = canvas.height - 10; 
-            const coralTypes = Object.keys(coralPalette);
-            for (let i = 0; i < randomInt(8, 15); i++) { // Slightly fewer corals
-                const type = coralTypes[randomInt(0, coralTypes.length - 1)];
-                let coralX = random(canvas.width * 0.05, canvas.width * 0.95); // Avoid edges
-                let coralY = seabedY - random(0, 30); 
-                
-                let tempCoral = new Coral(coralX, coralY, type); 
-                if (type === 'pillar') coralY = seabedY; 
-                else if (type === 'staghorn') coralY = seabedY - tempCoral.branchLength * 0.05; 
-                else if (type === 'fan') coralY = seabedY - tempCoral.height * 0.05;
-
-                coralArray.push(new Coral(coralX, coralY, type));
-            }
-            coralArray.sort((a, b) => a.y - b.y);
-
-            for (let i = 0; i < randomInt(12, 20); i++) { // Slightly fewer plants
-                let plantX = random(canvas.width * 0.05, canvas.width * 0.95);
-                let plantY = seabedY - random(-2, 10); 
-                plantArray.push(new Plant(plantX, plantY));
-            }
-            plantArray.sort((a,b) => a.y - b.y);
-
-            document.getElementById('fishCountDisplay').textContent = fishCount;
-            for (let i = 0; i < fishCount; i++) {
-                const species = Math.random() < 0.6 ? 'small_schooling' : 'medium_solitary';
-                fishArray.push(new Fish(species));
-            }
-
-            for (let i = 0; i < 25; i++) { 
-                bubbleArray.push(new Bubble());
-            }
-            
-            for (let i = 0; i < 80; i++) { 
-                particleArray.push(new Particle());
-            }
-        }
-
-        // --- Animation Loop ---
-        function animate() {
-            const bgGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-            bgGradient.addColorStop(0, '#00407A'); // Slightly darker top
-            bgGradient.addColorStop(0.5, '#002E5D'); 
-            bgGradient.addColorStop(1, '#001f3f'); 
-            ctx.fillStyle = bgGradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            lightRayArray.forEach(ray => {
-                ray.update();
-                ray.draw();
-            });
-            
-            drawCaustics();
-
-            ctx.fillStyle = '#A0702D'; // Slightly richer sand color: SaddleBrown-ish
-            ctx.beginPath();
-            ctx.moveTo(0, canvas.height);
-            const waveAmplitude = 12;
-            const waveLength = 250; // Longer waves
-            const timeFactor = Date.now() * 0.00005; // Slower wave movement
-            for(let x = 0; x <= canvas.width; x+=15) { // Smoother curve
-                const yOffset = Math.sin(x / waveLength * Math.PI * 2 + timeFactor + Math.sin(x/ (waveLength/3) * Math.PI*2 + timeFactor*2)*0.3 ) * waveAmplitude; // Compound sine for more natural waves
-                ctx.lineTo(x, canvas.height - 30 + yOffset);
-            }
-            ctx.lineTo(canvas.width, canvas.height);
-            ctx.closePath();
-            ctx.fill();
-            // Add subtle texture to seabed
-            for(let x = 0; x <= canvas.width; x+=30) {
-                 const yOffset = Math.sin(x / waveLength * Math.PI * 2 + timeFactor + Math.sin(x/ (waveLength/3) * Math.PI*2 + timeFactor*2)*0.3 ) * waveAmplitude;
-                 const textureAlpha = random(0.02, 0.08);
-                 ctx.fillStyle = `rgba(0,0,0,${textureAlpha})`;
-                 ctx.beginPath();
-                 ctx.arc(x + random(-10,10), canvas.height - 30 + yOffset + random(-3,3), random(1,3), 0, Math.PI*2);
-                 ctx.fill();
-            }
-
-
-            particleArray.forEach(p => {
-                p.update();
-                p.draw();
-            });
-
-            coralArray.forEach(coral => coral.draw());
-            plantArray.forEach(plant => plant.draw());
-            
-            fishArray.forEach(fish => {
-                fish.update(fishArray); 
-                fish.draw();
-            });
-
-            bubbleArray.forEach(bubble => {
-                bubble.update();
-                bubble.draw();
-            });
-
-            rippleEffects = rippleEffects.filter(r => r.opacity > 0);
-            rippleEffects.forEach(ripple => {
-                ripple.update();
-                ripple.draw();
-            });
-            
-            // Reset click flag after processing
-            if (mouse.clicked) mouse.clicked = false;
-
-            requestAnimationFrame(animate);
-        }
+        float mask = step(waterLevel, 1.0 - uv.y);
+        caustic *= mask * 0.3;
         
-        let causticTime = 0;
-        function drawCaustics() {
-            causticTime += 0.008; // Slower caustic movement
-            const seabedTop = canvas.height - 45; 
-            const causticHeight = 70; // Slightly larger area
+        gl_FragColor = vec4(0.2, 0.6, 1.0, caustic);
+      }
+    `);
+    gl.compileShader(fragmentShader);
+    
+    // Create shader program
+    this.program = gl.createProgram();
+    gl.attachShader(this.program, vertexShader);
+    gl.attachShader(this.program, fragmentShader);
+    gl.linkProgram(this.program);
+    
+    // Create buffer for full-screen quad
+    this.buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1, 1, -1, -1, 1, 1, 1
+    ]), gl.STATIC_DRAW);
+    
+    // Get uniform locations
+    this.timeUniform = gl.getUniformLocation(this.program, 'time');
+    this.resolutionUniform = gl.getUniformLocation(this.program, 'resolution');
+    this.waterLevelUniform = gl.getUniformLocation(this.program, 'waterLevel');
+    
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+  
+  resize(width, height) {
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.waterCanvas.width = width;
+    this.waterCanvas.height = height;
+    
+    if (this.hasWebGL) {
+      this.gl.viewport(0, 0, width, height);
+    }
+  }
+  
+  update(dt) {
+    this.time += dt;
+    
+    // Subtle camera drift
+    this.cameraOffset.x = Math.sin(this.time * 0.3) * 1;
+    this.cameraOffset.y = Math.cos(this.time * 0.4) * 1;
+  }
+  
+  clear() {
+    // Deep sea gradient background
+    const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+    gradient.addColorStop(0, '#001122');
+    gradient.addColorStop(1, '#002244');
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    // Add blue noise grain
+    this.ctx.globalAlpha = 0.04;
+    for (let i = 0; i < 500; i++) {
+      this.ctx.fillStyle = Math.random() > 0.5 ? '#4fc3f7' : '#1e88e5';
+      this.ctx.fillRect(
+        Math.random() * this.canvas.width,
+        Math.random() * this.canvas.height,
+        1, 1
+      );
+    }
+    this.ctx.globalAlpha = 1;
+  }
+  
+  drawWaterEffects(waterLevel) {
+    if (this.hasWebGL) {
+      const gl = this.gl;
+      gl.useProgram(this.program);
+      
+      gl.uniform1f(this.timeUniform, this.time);
+      gl.uniform2f(this.resolutionUniform, this.canvas.width, this.canvas.height);
+      gl.uniform1f(this.waterLevelUniform, waterLevel);
+      
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    } else {
+      // Fallback water effect
+      this.waterCtx.clearRect(0, 0, this.waterCanvas.width, this.waterCanvas.height);
+      this.waterCtx.globalAlpha = 0.2;
+      this.waterCtx.fillStyle = '#4fc3f7';
+      this.waterCtx.fillRect(0, waterLevel * this.canvas.height, this.canvas.width, this.canvas.height);
+    }
+  }
+  
+  drawPolyp(polyp) {
+    this.ctx.save();
+    this.ctx.translate(polyp.pos.x + this.cameraOffset.x, polyp.pos.y + this.cameraOffset.y);
+    
+    // Glow effect
+    if (polyp.glowIntensity > 0) {
+      this.ctx.globalAlpha = polyp.glowIntensity * 0.5;
+      this.ctx.beginPath();
+      this.ctx.arc(0, 0, polyp.size * 3, 0, Math.PI * 2);
+      this.ctx.fillStyle = `hsl(${polyp.hue}, 70%, 60%)`;
+      this.ctx.fill();
+      this.ctx.globalAlpha = 1;
+    }
+    
+    // Draw tentacles
+    polyp.tentacles.forEach(t => {
+      const x = Math.cos(t.angle + Math.sin(t.sway) * 0.3) * t.length;
+      const y = Math.sin(t.angle + Math.sin(t.sway) * 0.3) * t.length;
+      
+      this.ctx.strokeStyle = `hsl(${polyp.hue}, 60%, ${30 + polyp.energy / 3}%)`;
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, 0);
+      this.ctx.quadraticCurveTo(x * 0.5, y * 0.5, x, y);
+      this.ctx.stroke();
+      
+      // Tentacle tip
+      this.ctx.fillStyle = `hsl(${polyp.hue}, 80%, 50%)`;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, 1, 0, Math.PI * 2);
+      this.ctx.fill();
+    });
+    
+    // Draw body
+    const bodyGradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, polyp.size);
+    bodyGradient.addColorStop(0, `hsl(${polyp.hue}, 70%, ${40 + polyp.energy / 5}%)`);
+    bodyGradient.addColorStop(1, `hsl(${polyp.hue}, 60%, 20%)`);
+    
+    this.ctx.fillStyle = bodyGradient;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 0, polyp.size, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Energy indicator (subtle inner glow)
+    this.ctx.globalAlpha = polyp.energy / 100;
+    this.ctx.fillStyle = `hsl(${polyp.hue}, 90%, 70%)`;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 0, polyp.size * 0.6, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.globalAlpha = 1;
+    
+    this.ctx.restore();
+  }
+  
+  drawPrey(prey) {
+    this.ctx.save();
+    this.ctx.translate(prey.pos.x + this.cameraOffset.x, prey.pos.y + this.cameraOffset.y);
+    
+    if (prey.isStunned) {
+      this.ctx.globalAlpha = 0.5;
+    }
+    
+    // Draw based on type
+    this.ctx.fillStyle = prey.color;
+    this.ctx.strokeStyle = prey.color;
+    this.ctx.lineWidth = 1;
+    
+    if (prey.type === 'fish') {
+      // Fish shape
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, 0, prey.size, prey.size * 0.6, 0, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Tail
+      this.ctx.beginPath();
+      this.ctx.moveTo(-prey.size, 0);
+      this.ctx.lineTo(-prey.size * 1.5, -prey.size * 0.3);
+      this.ctx.lineTo(-prey.size * 1.5, prey.size * 0.3);
+      this.ctx.closePath();
+      this.ctx.fill();
+    } else if (prey.type === 'shrimp') {
+      // Shrimp shape
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, 0, prey.size, prey.size * 0.3, 0, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Antennae
+      this.ctx.beginPath();
+      this.ctx.moveTo(prey.size, 0);
+      this.ctx.lineTo(prey.size * 1.3, -prey.size * 0.5);
+      this.ctx.moveTo(prey.size, 0);
+      this.ctx.lineTo(prey.size * 1.3, prey.size * 0.5);
+      this.ctx.stroke();
+    } else {
+      // Plankton - simple circle
+      this.ctx.beginPath();
+      this.ctx.arc(0, 0, prey.size, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+    
+    this.ctx.globalAlpha = 1;
+    this.ctx.restore();
+  }
+  
+  drawPredator(predator) {
+    this.ctx.save();
+    this.ctx.translate(predator.pos.x + this.cameraOffset.x, predator.pos.y + this.cameraOffset.y);
+    
+    // Whelk shell
+    this.ctx.fillStyle = '#8B4513';
+    this.ctx.strokeStyle = '#654321';
+    this.ctx.lineWidth = 2;
+    
+    this.ctx.beginPath();
+    this.ctx.arc(0, 0, predator.size, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.stroke();
+    
+    // Shell spiral
+    this.ctx.strokeStyle = '#A0522D';
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 0, predator.size * 0.7, 0, Math.PI * 1.5);
+    this.ctx.stroke();
+    
+    this.ctx.restore();
+  }
+  
+  drawTideLine(waterLevel) {
+    const y = waterLevel * this.canvas.height;
+    
+    // Water surface with wave effect
+    this.ctx.strokeStyle = '#4fc3f7';
+    this.ctx.lineWidth = 2;
+    this.ctx.globalAlpha = 0.6;
+    
+    this.ctx.beginPath();
+    for (let x = 0; x < this.canvas.width; x += 5) {
+      const wave = Math.sin(x * 0.01 + this.time * 2) * 3;
+      this.ctx.lineTo(x, y + wave);
+    }
+    this.ctx.stroke();
+    this.ctx.globalAlpha = 1;
+  }
+}
 
-            for (let y = 0; y < causticHeight; y += 6) { // Slightly larger steps
-                for (let x = 0; x < canvas.width; x += 60) { // Slightly larger steps
-                    const brightness = (Math.sin(x * 0.015 + causticTime + y * 0.04) + Math.cos(y*0.025 + causticTime*0.6 + x*0.008)) * 0.5 + 0.5; 
-                    const alpha = brightness * 0.04 * (1 - y/causticHeight); 
-                    if (alpha > 0.005) { // Lower threshold for more subtle caustics
-                        ctx.fillStyle = `rgba(255, 255, 200, ${alpha})`; 
-                        ctx.beginPath();
-                        const offsetX = Math.sin(causticTime * 1.2 + x*0.08) * 12;
-                        const offsetY = Math.cos(causticTime*0.8 + y*0.08) * 6;
-                        ctx.ellipse(x + offsetX, seabedTop + y + offsetY, 35 + brightness * 25, 4 + brightness * 3, Math.sin(x+y+causticTime*1.1)*0.25, 0, Math.PI*2);
-                        ctx.fill();
-                    }
-                }
+class Game {
+  constructor() {
+    this.canvas = document.getElementById('canvas');
+    this.waterCanvas = document.getElementById('water');
+    this.ctx = this.canvas.getContext('2d');
+    
+    this.renderer = new Renderer(this.canvas, this.waterCanvas);
+    this.audio = new AudioBus();
+    this.currents = new CurrentField();
+    this.tide = new TideSystem();
+    
+    this.polyps = [];
+    this.prey = [];
+    this.predators = [];
+    
+    this.lastTime = 0;
+    this.isRunning = false;
+    this.touchStartTime = 0;
+    this.touchPos = new Vec();
+    
+    this.init();
+  }
+  
+  init() {
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+    
+    // Input handling
+    this.canvas.addEventListener('click', (e) => this.handleClick(e));
+    this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e));
+    this.canvas.addEventListener('touchend', (e) => this.handleTouchEnd(e));
+    
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        this.reset();
+      }
+    });
+    
+    // Initialize with some polyps
+    this.reset();
+    this.start();
+  }
+  
+  resize() {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    this.renderer.resize(width, height);
+  }
+  
+  reset() {
+    this.polyps = [];
+    this.prey = [];
+    this.predators = [];
+    
+    // Add initial polyps
+    for (let i = 0; i < 3; i++) {
+      this.polyps.push(new Polyp(new Vec(
+        100 + i * 150,
+        this.canvas.height * 0.8
+      )));
+    }
+    
+    // Add some prey
+    for (let i = 0; i < 15; i++) {
+      const types = ['plankton', 'plankton', 'shrimp', 'fish'];
+      this.prey.push(new Prey(
+        new Vec(Math.random() * this.canvas.width, Math.random() * this.canvas.height),
+        types[Math.floor(Math.random() * types.length)]
+      ));
+    }
+    
+    // Add a predator
+    this.predators.push(new Predator(new Vec(
+      this.canvas.width * 0.8,
+      this.canvas.height * 0.6
+    )));
+  }
+  
+  getMousePos(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    return new Vec(
+      e.clientX - rect.left,
+      e.clientY - rect.top
+    );
+  }
+  
+  getTouchPos(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const touch = e.touches[0] || e.changedTouches[0];
+    return new Vec(
+      touch.clientX - rect.left,
+      touch.clientY - rect.top
+    );
+  }
+  
+  handleClick(e) {
+    e.preventDefault();
+    const pos = this.getMousePos(e);
+    this.handleInput(pos, false);
+  }
+  
+  handleTouchStart(e) {
+    e.preventDefault();
+    this.touchStartTime = Date.now();
+    this.touchPos = this.getTouchPos(e);
+  }
+  
+  handleTouchEnd(e) {
+    e.preventDefault();
+    const touchDuration = Date.now() - this.touchStartTime;
+    const isLongPress = touchDuration > 500;
+    this.handleInput(this.touchPos, isLongPress);
+  }
+  
+  handleInput(pos, isLongPress) {
+    // First try to sting with nearby polyps
+    if (!isLongPress) {
+      for (const polyp of this.polyps) {
+        if (polyp.pos.dist(pos) < polyp.stingRange && polyp.canSting()) {
+          // Check for prey in range
+          for (const creature of this.prey) {
+            if (polyp.sting(creature)) {
+              creature.takeDamage();
+              this.audio.play('sting');
+              
+              if (creature.isDead) {
+                polyp.digest(creature);
+                this.audio.play('eat');
+              }
+              return;
             }
+          }
+          
+          // Also check predators
+          for (const predator of this.predators) {
+            if (polyp.pos.dist(predator.pos) < polyp.stingRange) {
+              polyp.stingCooldown = 2;
+              polyp.energy -= 5;
+              this.audio.play('sting');
+              return;
+            }
+          }
         }
+      }
+    }
+    
+    // Try to clone if clicking empty space or long press
+    if (isLongPress || true) {
+      let nearestPolyp = null;
+      let minDist = Infinity;
+      
+      for (const polyp of this.polyps) {
+        if (polyp.canClone()) {
+          const dist = polyp.pos.dist(pos);
+          if (dist < minDist) {
+            minDist = dist;
+            nearestPolyp = polyp;
+          }
+        }
+      }
+      
+      if (nearestPolyp && minDist < 100) {
+        const newPolyp = nearestPolyp.clone(pos);
+        if (newPolyp) {
+          this.polyps.push(newPolyp);
+          this.audio.play('clone');
+        }
+      }
+    }
+  }
+  
+  update(dt) {
+    this.currents.update(dt);
+    this.tide.update(dt);
+    this.renderer.update(dt);
+    
+    // Update all entities
+    this.polyps.forEach(polyp => polyp.update(dt, this));
+    this.prey.forEach(creature => creature.update(dt, this));
+    this.predators.forEach(predator => predator.update(dt, this));
+    
+    // Remove dead entities
+    this.polyps = this.polyps.filter(p => !p.isDead);
+    this.prey = this.prey.filter(p => !p.isDead);
+    
+    // Spawn new prey occasionally
+    if (Math.random() < dt * 0.3 && this.prey.length < 20) {
+      const types = ['plankton', 'plankton', 'plankton', 'shrimp', 'fish'];
+      this.prey.push(new Prey(
+        new Vec(Math.random() * this.canvas.width, Math.random() * this.canvas.height * 0.8),
+        types[Math.floor(Math.random() * types.length)]
+      ));
+    }
+  }
+  
+  render() {
+    this.renderer.clear();
+    
+    const waterLevel = this.tide.getWaterLevel();
+    
+    // Draw entities
+    this.predators.forEach(predator => this.renderer.drawPredator(predator));
+    this.prey.forEach(creature => this.renderer.drawPrey(creature));
+    this.polyps.forEach(polyp => this.renderer.drawPolyp(polyp));
+    
+    // Draw tide line
+    this.renderer.drawTideLine(waterLevel);
+    
+    // Draw water effects
+    this.renderer.drawWaterEffects(waterLevel);
+  }
+  
+  gameLoop(currentTime) {
+    if (!this.isRunning) return;
+    
+    const dt = Math.min((currentTime - this.lastTime) / 1000, 0.016); // Cap at 60fps
+    this.lastTime = currentTime;
+    
+    if (dt > 0) {
+      this.update(dt);
+      this.render();
+    }
+    
+    requestAnimationFrame((time) => this.gameLoop(time));
+  }
+  
+  start() {
+    this.isRunning = true;
+    this.lastTime = performance.now();
+    requestAnimationFrame((time) => this.gameLoop(time));
+  }
+  
+  stop() {
+    this.isRunning = false;
+  }
+}
 
-        const fishSlider = document.getElementById('fishSlider');
-        fishSlider.addEventListener('input', (e) => {
-            fishCount = parseInt(e.target.value);
-            document.getElementById('fishCountDisplay').textContent = fishCount;
-        });
-        fishSlider.addEventListener('change', (e) => { 
-            fishCount = parseInt(e.target.value);
-            init();
-        });
+// Start the game when page loads
+window.addEventListener('load', () => {
+  new Game();
+});
 
-        document.getElementById('resetSimButton').addEventListener('click', () => {
-            init(); 
-        });
-        
-        window.addEventListener('resize', () => {
-            init(); 
-        });
-
-        init();
-        animate();
-
-    </script>
+// Handle page visibility for performance
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // Pause audio context when tab becomes hidden
+  }
+});
+</script>
 </body>
 </html>
